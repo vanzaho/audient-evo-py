@@ -11,15 +11,23 @@ Requirements:
   - PipeWire running with EVO sinks/sources available
   - No other audio playing through the device during tests
   - pip: sounddevice, numpy
+  - Mixer restore uses the saved shadow state because MU60 has no reliable readback
+
+Run with: pytest tests/test_mixer_audio.py --hardware --audio --device evo4
 """
 
 import time
 
-import numpy as np
 import pytest
-import sounddevice as sd
 
-from evo.controller import EVOController, _MIXER_DB_MIN
+np = pytest.importorskip("numpy")
+sd = pytest.importorskip("sounddevice")
+
+from evo.config import apply as apply_config
+from evo.config import load_or_default_mixer_state
+from evo.controller import _MIXER_DB_MIN
+
+pytestmark = [pytest.mark.hardware, pytest.mark.audio]
 
 # -- Audio constants --
 
@@ -128,16 +136,21 @@ def loop_cap(node_names):
 
 
 @pytest.fixture(autouse=True)
-def silence_all_crosspoints(evo, device_spec):
-    """Mute every crosspoint before and after each test."""
-    total = device_spec.mixer_inputs * device_spec.mixer_outputs
-    def _silence():
+def preserve_mixer_state(evo, device_spec):
+    """Restore the saved mixer shadow after each test."""
+    saved = load_or_default_mixer_state(device_spec)
+
+    def _silence_all():
+        total = device_spec.mixer_inputs * device_spec.mixer_outputs
         for cn in range(total):
             evo.set_mixer_crosspoint(cn, _MIXER_DB_MIN)
         time.sleep(0.05)
-    _silence()
-    yield
-    _silence()
+
+    _silence_all()
+    try:
+        yield
+    finally:
+        apply_config(evo, {"mixer": saved})
 
 
 SETTLE = 0.1  # seconds after mixer changes before starting audio

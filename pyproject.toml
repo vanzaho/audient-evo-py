@@ -13,6 +13,10 @@ requires-python = ">=3.10"
 evoctl = "evoctl:main"
 evotui = "evotui:main"
 
+[project.optional-dependencies]
+dev = ["pytest"]
+audio-test = ["numpy", "sounddevice"]
+
 [tool.setuptools]
 py-modules = ["evoctl", "evotui"]
 packages = ["evo"]
@@ -20,9 +24,16 @@ packages = ["evo"]
 [tool.ruff]
 line-length = 100
 
+[tool.pytest.ini_options]
+markers = [
+    "unit: no hardware, audio stack, or manual input required",
+    "hardware: requires a connected EVO device and evo_raw",
+    "audio: requires optional audio-test deps and PipeWire audio devices",
+    "manual: requires interactive user input",
+]
+
 [tool.basedpyright]
 reportMissingTypeStubs = "none"
 reportUnknownVariableType = "none"
 reportUnknownMemberType = "none"
 reportUnusedCallResult = "none"
-

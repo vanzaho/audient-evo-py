@@ -36,6 +36,20 @@ pipx ensurepath
 pipx install path/to/audient-evo-py
 ```
 
+For test dependencies in a pipx install:
+
+```bash
+pipx inject audient-evo pytest
+pipx inject audient-evo numpy sounddevice  # audio tests only
+```
+
+For editable development:
+
+```bash
+python -m pip install -e .[dev]
+python -m pip install -e .[dev,audio-test]  # audio tests only
+```
+
 ### Kernel module
 
 Builds and installs kernel module, adds udev rule loads the module.
@@ -109,6 +123,17 @@ selects the mixer destination bus. Device controls can be saved/loaded via
 ## Design
 
 See [DESIGN.md](dev/DESIGN.md) for architecture, protocol, and USB entity details.
+
+## Tests
+
+| Command | Needs |
+|---------|-------|
+| `python -m pytest tests/test_kmod.py tests/test_devices.py tests/test_config.py tests/test_evoctl.py` | `[dev]` |
+| `python -m pytest` | `[dev]`; hardware, audio, and manual tests are skipped |
+| `python -m pytest --hardware --device evo4 -m hardware` | `[dev]`, kernel module, connected EVO; skips manual phantom-power tests unless `--manual` is also set |
+| `python -m pytest tests/test_mixer_audio.py --hardware --audio --device evo4` | `[dev,audio-test]`, kernel module, connected EVO, WirePlumber config |
+| `python -m pytest tests/test_controller.py --hardware --manual --device evo4 -m manual` | `[dev]`, connected EVO, safe phantom-power setup |
+| `python -m pytest tests/test_mixer_mic.py -s --hardware --audio --manual --device evo4` | `[dev,audio-test]`, connected mic, manual prompts |
 
 ## Related Projects
 

@@ -51,36 +51,38 @@ def _usb_to_db(raw: int) -> float:
     return raw / 256.0
 
 
+def _signed_raw(raw: int) -> int:
+    return raw if raw <= 0x7FFF else raw - 0x10000
+
+
 class EVOController:
     def __init__(self, spec: DeviceSpec):
         self.spec = spec
         self._require_kmod()
         self._fd = None
 
-        # Build target dicts from spec
         self._gain_targets = {f"input{i+1}": i + 1 for i in range(spec.num_inputs)}
-
-        # Mute targets: inputs use EU58 (0x3A00), outputs use EU59 (0x3B00)
-        self._mute_targets = {}
-        for i in range(spec.num_inputs):
-            self._mute_targets[f"input{i+1}"] = (0x0200 + i, 0x3A00)
+        self._mute_targets = {
+            f"input{i+1}": (0x0200 + i, 0x3A00) for i in range(spec.num_inputs)
+        }
         if spec.num_output_pairs == 1:
             self._mute_targets["output"] = (0x0100, 0x3B00)
         else:
-            for i in range(spec.num_output_pairs):
-                target_idx = spec.num_inputs + i
-                self._mute_targets[f"output{i+1}"] = (0x0200 + target_idx, 0x3A00)
+            self._mute_targets.update(
+                {
+                    f"output{i+1}": (0x0200 + spec.num_inputs + i, 0x3A00)
+                    for i in range(spec.num_output_pairs)
+                }
+            )
 
-        # Phantom targets: one per input, EU58 CS=0
         self._phantom_targets = {
             f"input{i+1}": (0x0000 + i, 0x3A00) for i in range(spec.num_inputs)
         }
 
-        # Mixer dimensions
         self._mixer_max_cn = spec.mixer_inputs * spec.mixer_outputs
         # MU60 inputs are mic/line inputs followed by stereo USB output source pairs.
         self._num_mixer_output_sources = (spec.mixer_inputs - spec.num_inputs) // 2
-        self._out_num_outputs = spec.mixer_outputs
+        self._mixer_outputs = spec.mixer_outputs
 
     def __enter__(self):
         self._fd = kmod.open_device(self.spec.dev_path)
@@ -139,17 +141,12 @@ class EVOController:
         Returns (raw, dB) sent."""
         db = max(self.spec.vol_db_min, min(self.spec.vol_db_max, db))
         raw = _db_to_usb(db)
-        if output_pair is None:
-            # Set all output pairs
-            for pair in range(self.spec.num_output_pairs):
-                base_cn = pair * 2 + 1
-                for cn in range(base_cn, base_cn + 2):
-                    self._set_fu_raw(_FU10, cn, raw)
-        else:
-            base_cn = output_pair * 2 + 1
+        pairs = range(self.spec.num_output_pairs) if output_pair is None else (output_pair,)
+        for pair in pairs:
+            base_cn = pair * 2 + 1
             for cn in range(base_cn, base_cn + 2):
                 self._set_fu_raw(_FU10, cn, raw)
-        return (raw if raw <= 0x7FFF else raw - 0x10000, db)
+        return (_signed_raw(raw), db)
 
     # --- Input Gain (Feature Unit 11) ---
 
@@ -171,7 +168,7 @@ class EVOController:
         db = max(self.spec.gain_db_min, min(self.spec.gain_db_max, db))
         raw = _db_to_usb(db)
         self._set_fu_raw(_FU11, cn, raw)
-        return (raw if raw <= 0x7FFF else raw - 0x10000, db)
+        return (_signed_raw(raw), db)
 
     # --- Mute (Entity 58 for inputs, Entity 59 for output) ---
 
@@ -243,13 +240,9 @@ class EVOController:
         if not already_open:
             self._fd = kmod.open_device(self.spec.dev_path)
         try:
-            # Volume: read from first output pair
             vol = self._get_fu_raw(_FU10, 1)
-
-            # Gains: one per input
             gains = [self._get_fu_raw(_FU11, i + 1) for i in range(self.spec.num_inputs)]
 
-            # Monitor mix (EVO 4 only)
             if self.spec.has_monitor:
                 with self._device() as fd:
                     mix_bytes = kmod.get_cur(fd, self._EU56_WVALUE, self._EU56_WINDEX, 2)
@@ -257,42 +250,27 @@ class EVOController:
             else:
                 mix_raw = None
 
-            # Additional volumes for extra output pairs
-            extra_vols = []
-            for pair in range(1, self.spec.num_output_pairs):
-                extra_vols.append(self._get_fu_raw(_FU10, pair * 2 + 1))
-
-            # Mutes
+            extra_vols = [
+                self._get_fu_raw(_FU10, pair * 2 + 1)
+                for pair in range(1, self.spec.num_output_pairs)
+            ]
             mutes = {t: int(self.get_mute(t)) for t in self._mute_targets}
-
-            # Phantoms
             phantoms = {t: int(self.get_phantom(t)) for t in self._phantom_targets}
         finally:
             if not already_open and self._fd is not None:
                 self._fd.close()
                 self._fd = None
 
-        # Pack into a dict-based format since struct varies by device
         return self._pack_status(vol, gains, mix_raw, extra_vols, mutes, phantoms)
 
     def _pack_status(self, vol, gains, mix_raw, extra_vols, mutes, phantoms) -> bytes:
-        """Pack status into bytes. Format depends on device.
-        mix_raw is None for devices without a direct monitor control (EVO 8).
-        """
-        # Base: vol(h) + gains(h * num_inputs) [+ mix(B) if has_monitor]
-        # + extra_vols(h * (num_output_pairs-1)) + mutes(B * num_mute_targets)
-        # + phantoms(B * num_inputs)
-        parts = [struct.pack("<h", vol)]
-        for g in gains:
-            parts.append(struct.pack("<h", g))
+        """Pack status into bytes. Format depends on device."""
+        parts = [struct.pack("<h", value) for value in (vol, *gains)]
         if mix_raw is not None:
             parts.append(struct.pack("<B", mix_raw))
-        for ev in extra_vols:
-            parts.append(struct.pack("<h", ev))
-        for t in sorted(mutes):
-            parts.append(struct.pack("<B", mutes[t]))
-        for t in sorted(phantoms):
-            parts.append(struct.pack("<B", phantoms[t]))
+        parts.extend(struct.pack("<h", value) for value in extra_vols)
+        parts.extend(struct.pack("<B", mutes[t]) for t in sorted(mutes))
+        parts.extend(struct.pack("<B", phantoms[t]) for t in sorted(phantoms))
         return b"".join(parts)
 
     def decode_status(self, data: bytes) -> dict:
@@ -315,10 +293,8 @@ class EVOController:
         gains = [read_h() for _ in range(self.spec.num_inputs)]
         mix_raw = read_B() if self.spec.has_monitor else None
         extra_vols = [read_h() for _ in range(self.spec.num_output_pairs - 1)]
-        mute_targets = sorted(self._mute_targets)
-        mute_vals = {t: read_B() for t in mute_targets}
-        phantom_targets = sorted(self._phantom_targets)
-        phantom_vals = {t: read_B() for t in phantom_targets}
+        mute_vals = {t: read_B() for t in sorted(self._mute_targets)}
+        phantom_vals = {t: read_B() for t in sorted(self._phantom_targets)}
 
         result = {}
         if mix_raw is not None:
@@ -359,6 +335,18 @@ class EVOController:
         if not exists(self.spec.dev_path):
             raise RuntimeError(
                 f"evo_raw kernel module not loaded ({self.spec.dev_path} not found)"
+            )
+
+    def _require_mix_output(self, mix_output: int) -> None:
+        if not 0 <= mix_output < self.spec.num_output_pairs:
+            raise ValueError(
+                f"mix_output must be 0 to {self.spec.num_output_pairs - 1}, got {mix_output}"
+            )
+
+    def _require_output_pair(self, output_pair: int) -> None:
+        if not 0 <= output_pair < self._num_mixer_output_sources:
+            raise ValueError(
+                f"output_pair must be 0 to {self._num_mixer_output_sources - 1}, got {output_pair}"
             )
 
     # --- Mixer Matrix (Mixer Unit 60) ---
@@ -406,16 +394,13 @@ class EVOController:
         input_num: 1-based (1 to num_inputs).
         mix_output: 0-based mixer output (0=OUT1+2, 1=OUT3+4 on EVO 8).
         """
+        self._require_mix_output(mix_output)
         if not 1 <= input_num <= self.spec.num_inputs:
             raise ValueError(
                 f"input_num must be 1 to {self.spec.num_inputs}, got {input_num}"
             )
-        if not 0 <= mix_output < self.spec.num_output_pairs:
-            raise ValueError(
-                f"mix_output must be 0 to {self.spec.num_output_pairs - 1}, got {mix_output}"
-            )
         l_db, r_db = self._pan_to_lr_db(gain_db, pan)
-        base = (input_num - 1) * self._out_num_outputs + mix_output * 2
+        base = (input_num - 1) * self._mixer_outputs + mix_output * 2
         self.set_mixer_crosspoint(base + 0, l_db)
         self.set_mixer_crosspoint(base + 1, r_db)
 
@@ -427,20 +412,14 @@ class EVOController:
         output_pair: 0-based source pair (0=OUT1+2, 1=OUT3+4, 2=OUT5+6 on EVO 8).
         mix_output: 0-based mixer output (0=OUT1+2, 1=OUT3+4 on EVO 8).
         """
-        if not 0 <= output_pair < self._num_mixer_output_sources:
-            raise ValueError(
-                f"output_pair must be 0 to {self._num_mixer_output_sources - 1}, got {output_pair}"
-            )
-        if not 0 <= mix_output < self.spec.num_output_pairs:
-            raise ValueError(
-                f"mix_output must be 0 to {self.spec.num_output_pairs - 1}, got {mix_output}"
-            )
+        self._require_output_pair(output_pair)
+        self._require_mix_output(mix_output)
         output_l_in = self.spec.num_inputs + output_pair * 2
         output_r_in = output_l_in + 1
         l_db_l, r_db_l = self._pan_to_lr_db(volume_db, pan_l)
         l_db_r, r_db_r = self._pan_to_lr_db(volume_db, pan_r)
         out_off = mix_output * 2
-        self.set_mixer_crosspoint(output_l_in * self._out_num_outputs + out_off, l_db_l)
-        self.set_mixer_crosspoint(output_l_in * self._out_num_outputs + out_off + 1, r_db_l)
-        self.set_mixer_crosspoint(output_r_in * self._out_num_outputs + out_off, l_db_r)
-        self.set_mixer_crosspoint(output_r_in * self._out_num_outputs + out_off + 1, r_db_r)
+        self.set_mixer_crosspoint(output_l_in * self._mixer_outputs + out_off, l_db_l)
+        self.set_mixer_crosspoint(output_l_in * self._mixer_outputs + out_off + 1, r_db_l)
+        self.set_mixer_crosspoint(output_r_in * self._mixer_outputs + out_off, l_db_r)
+        self.set_mixer_crosspoint(output_r_in * self._mixer_outputs + out_off + 1, r_db_r)

@@ -7,7 +7,7 @@ loopback channel(s) based on pan setting.
 Signal path under test:
   Microphone -> EVO Input -> MU60 crosspoints -> Loopback In -> PipeWire -> Python
 
-Run with:  pytest tests/test_mixer_mic.py -s
+Run with:  pytest tests/test_mixer_mic.py -s --hardware --audio --manual --device evo4
 The -s flag is required so interactive prompts are visible.
 
 Requirements:
@@ -15,15 +15,21 @@ Requirements:
   - PipeWire running with EVO sinks/sources available
   - A microphone connected to one of the inputs
   - pip: sounddevice, numpy
+  - Mixer restore uses the saved shadow state because MU60 has no reliable readback
 """
 
 import time
 
-import numpy as np
 import pytest
-import sounddevice as sd
 
+np = pytest.importorskip("numpy")
+sd = pytest.importorskip("sounddevice")
+
+from evo.config import apply as apply_config
+from evo.config import load_or_default_mixer_state
 from evo.controller import _MIXER_DB_MIN
+
+pytestmark = [pytest.mark.hardware, pytest.mark.audio, pytest.mark.manual]
 
 SAMPLE_RATE = 48000
 CAPTURE_DURATION = 3.0      # seconds to capture while user makes noise
@@ -111,16 +117,21 @@ def input_num(device_spec):
 
 
 @pytest.fixture(autouse=True)
-def silence_all_crosspoints(evo, device_spec):
-    """Silence all crosspoints before and after each test."""
-    total = device_spec.mixer_inputs * device_spec.mixer_outputs
-    def _silence():
+def preserve_mixer_state(evo, device_spec):
+    """Restore the saved mixer shadow after each test."""
+    saved = load_or_default_mixer_state(device_spec)
+
+    def _silence_all():
+        total = device_spec.mixer_inputs * device_spec.mixer_outputs
         for cn in range(total):
             evo.set_mixer_crosspoint(cn, _MIXER_DB_MIN)
         time.sleep(0.05)
-    _silence()
-    yield
-    _silence()
+
+    _silence_all()
+    try:
+        yield
+    finally:
+        apply_config(evo, {"mixer": saved})
 
 
 class TestMicInput:

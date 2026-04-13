@@ -54,6 +54,7 @@ class TestDbConversions:
 
 # --- Hardware integration tests ---
 
+@pytest.mark.hardware
 class TestVolume:
     def test_set_and_get(self, evo):
         original = evo.get_volume()
@@ -112,6 +113,7 @@ class TestVolume:
             evo.set_volume(original, output_pair=1)
 
 
+@pytest.mark.hardware
 class TestGain:
     @pytest.mark.parametrize("target", ["input1", "input2", "input3", "input4"])
     def test_set_and_get(self, evo, target):
@@ -182,6 +184,7 @@ class TestGain:
         assert device_spec.gain_db_min <= db <= device_spec.gain_db_max
 
 
+@pytest.mark.hardware
 class TestMute:
     @pytest.mark.parametrize("target", [
         "input1", "input2", "input3", "input4",
@@ -249,6 +252,8 @@ class TestMute:
             evo.set_mute("nonexistent", True)
 
 
+@pytest.mark.hardware
+@pytest.mark.manual
 class TestPhantom:
     @pytest.mark.parametrize("target", ["input1", "input2", "input3", "input4"])
     def test_toggle_phantom(self, evo, target):
@@ -308,6 +313,7 @@ class TestPhantom:
             evo.set_phantom("nonexistent", True)
 
 
+@pytest.mark.hardware
 class TestMonitor:
     @pytest.fixture(autouse=True)
     def _require_monitor(self, device_spec):
@@ -355,6 +361,7 @@ class TestMonitor:
         assert 0 <= result <= 100
 
 
+@pytest.mark.hardware
 class TestMonitorUnavailable:
     """Verify monitor raises on devices without it."""
 
@@ -503,6 +510,7 @@ class TestMixerValidation:
 
 # --- Mixer integration tests (hardware) ---
 
+@pytest.mark.hardware
 class TestMixer:
     def test_set_crosspoint(self, evo):
         """Set CN=0 to 0 dB - should not error."""

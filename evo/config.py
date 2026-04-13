@@ -6,6 +6,8 @@ Per-device config paths:
 """
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from evo.devices import DeviceSpec
@@ -24,6 +26,34 @@ def config_file(device_name: str) -> Path:
 
 def mixer_state_file(device_name: str) -> Path:
     return _device_dir(device_name) / ".mixer-state.json"
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{path}: invalid JSON: {exc}") from exc
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp = Path(f.name)
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except Exception:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+        raise
 
 
 def _input_state() -> dict:
@@ -101,27 +131,44 @@ def mix_output_label(spec: DeviceSpec, mix_output: int) -> str:
 
 def default_mixer_state(spec: DeviceSpec) -> dict:
     """Return the canonical shadow state for the device mixer."""
-    mix_outputs = {}
-    for mix_output in range(spec.num_output_pairs):
-        mix_outputs[mix_output_key(spec, mix_output)] = (
-            {
+    return {
+        "version": MIXER_STATE_VERSION,
+        "mix_outputs": {
+            mix_output_key(spec, mix_output): {
                 "mix_output": mix_output,
-                "inputs": {
-                    f"input{i + 1}": _input_state()
-                    for i in range(spec.num_inputs)
-                },
+                "inputs": {f"input{i + 1}": _input_state() for i in range(spec.num_inputs)},
                 "outputs": {
                     output_key(pair): _output_state(pair)
                     for pair in range(num_mixer_output_sources(spec))
                 },
             }
-        )
-    return {"version": MIXER_STATE_VERSION, "mix_outputs": mix_outputs}
+            for mix_output in range(spec.num_output_pairs)
+        },
+    }
 
 
 def _require_mixer_state(state: dict) -> None:
-    if state.get("version") != MIXER_STATE_VERSION or not isinstance(state.get("mix_outputs"), dict):
+    if (
+        state.get("version") != MIXER_STATE_VERSION
+        or not isinstance(state.get("mix_outputs"), dict)
+    ):
         raise ValueError(f"Unsupported mixer state schema: {state.get('version')!r}")
+
+
+def _require_mix_output(spec: DeviceSpec, mix_output: int) -> None:
+    if not 0 <= mix_output < spec.num_output_pairs:
+        raise ValueError(f"mix_output must be 0 to {spec.num_output_pairs - 1}, got {mix_output}")
+
+
+def _require_input_num(spec: DeviceSpec, input_num: int) -> None:
+    if not 1 <= input_num <= spec.num_inputs:
+        raise ValueError(f"input_num must be 1 to {spec.num_inputs}, got {input_num}")
+
+
+def _require_output_pair(spec: DeviceSpec, output_pair: int) -> None:
+    count = num_mixer_output_sources(spec)
+    if not 0 <= output_pair < count:
+        raise ValueError(f"output_pair must be 0 to {count - 1}, got {output_pair}")
 
 
 def load_or_default_mixer_state(spec: DeviceSpec, path=None) -> dict:
@@ -163,10 +210,8 @@ def update_mixer_input_state(
     mix_output: int = 0,
 ) -> None:
     """Update a mic/line input route in canonical mixer state."""
-    if not 0 <= mix_output < spec.num_output_pairs:
-        raise ValueError(f"mix_output must be 0 to {spec.num_output_pairs - 1}, got {mix_output}")
-    if not 1 <= input_num <= spec.num_inputs:
-        raise ValueError(f"input_num must be 1 to {spec.num_inputs}, got {input_num}")
+    _require_mix_output(spec, mix_output)
+    _require_input_num(spec, input_num)
     mixer_section_state(state, spec, f"input{input_num}", mix_output).update(
         {"volume": volume, "pan": pan}
     )
@@ -182,12 +227,8 @@ def update_mixer_output_state(
     mix_output: int = 0,
 ) -> None:
     """Update a USB output source pair route in canonical mixer state."""
-    if not 0 <= mix_output < spec.num_output_pairs:
-        raise ValueError(f"mix_output must be 0 to {spec.num_output_pairs - 1}, got {mix_output}")
-    if not 0 <= output_pair < num_mixer_output_sources(spec):
-        raise ValueError(
-            f"output_pair must be 0 to {num_mixer_output_sources(spec) - 1}, got {output_pair}"
-        )
+    _require_mix_output(spec, mix_output)
+    _require_output_pair(spec, output_pair)
     mixer_section_state(state, spec, output_key(output_pair), mix_output).update(
         {
             "output_pair": output_pair,
@@ -203,7 +244,7 @@ def load_mixer_state(device_name: str, path=None) -> dict | None:
     p = Path(path) if path else mixer_state_file(device_name)
     if not p.exists():
         return None
-    state = json.loads(p.read_text())
+    state = _read_json(p)
     _require_mixer_state(state)
     return state
 
@@ -212,8 +253,7 @@ def save_mixer_state(device_name: str, state: dict, path=None):
     """Persist canonical MU60 shadow state to disk."""
     _require_mixer_state(state)
     p = Path(path) if path else mixer_state_file(device_name)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(state, indent=2) + "\n")
+    _write_json(p, state)
 
 
 def snapshot(evo) -> dict:
@@ -228,15 +268,14 @@ def snapshot(evo) -> dict:
 def save(evo, path=None) -> Path:
     """Save current device state to JSON file."""
     path = Path(path) if path else config_file(evo.spec.name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snapshot(evo), indent=2) + "\n")
+    _write_json(path, snapshot(evo))
     return path
 
 
 def load(device_name: str, path=None) -> dict:
     """Load config dict from JSON file."""
     path = Path(path) if path else config_file(device_name)
-    return json.loads(path.read_text())
+    return _read_json(path)
 
 
 def apply(evo, data: dict):
@@ -280,7 +319,9 @@ def apply(evo, data: dict):
         mx = data["mixer"]
         _require_mixer_state(mx)
         for mix_key, mix in mx["mix_outputs"].items():
-            mix_output = mix["mix_output"] if "mix_output" in mix else mix_output_index(spec, mix_key)
+            mix_output = (
+                mix["mix_output"] if "mix_output" in mix else mix_output_index(spec, mix_key)
+            )
             inputs = mix.get("inputs", {})
             for i in range(spec.num_inputs):
                 key = f"input{i+1}"

@@ -64,9 +64,9 @@ def parse_args(spec, argv=None):
     status_p.add_argument("--format", "-f", choices=["plain", "json"], default="plain")
 
     save_p = sparser.add_parser("save", help="Save config to file.")
-    save_p.add_argument("path", nargs="?", default=None, help=f"Defa: {cf}.")
+    save_p.add_argument("path", nargs="?", default=None, help=f"Default: {cf}.")
     load_p = sparser.add_parser("load", help="Load and apply config from file.")
-    load_p.add_argument("path", nargs="?", default=None, help=f"Defa: {cf}.")
+    load_p.add_argument("path", nargs="?", default=None, help=f"Default: {cf}.")
 
     # Mixer
     mixer_p = sparser.add_parser("mixer", aliases=["m"], help="Mixer matrix config.")

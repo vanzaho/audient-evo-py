@@ -6,12 +6,42 @@ from evo.devices import DEVICES, DeviceSpec, detect_devices
 
 
 def pytest_addoption(parser):
-    parser.addoption(
+    group = parser.getgroup("audient-evo")
+    group.addoption(
         "--device",
         choices=["evo4", "evo8", "auto"],
         default="auto",
         help="Device to test: evo4, evo8, or auto (detect from /dev/evo*).",
     )
+    group.addoption(
+        "--hardware",
+        action="store_true",
+        help="Run tests that require a connected EVO device.",
+    )
+    group.addoption(
+        "--audio",
+        action="store_true",
+        help="Run tests that require optional audio deps and PipeWire devices.",
+    )
+    group.addoption(
+        "--manual",
+        action="store_true",
+        help="Run interactive tests that require user input.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    gates = {
+        "hardware": config.getoption("--hardware"),
+        "audio": config.getoption("--audio"),
+        "manual": config.getoption("--manual"),
+    }
+    for item in items:
+        if not any(mark in item.keywords for mark in gates):
+            item.add_marker(pytest.mark.unit)
+        for mark, enabled in gates.items():
+            if mark in item.keywords and not enabled:
+                item.add_marker(pytest.mark.skip(reason=f"needs --{mark}"))
 
 
 @pytest.fixture(scope="session")
