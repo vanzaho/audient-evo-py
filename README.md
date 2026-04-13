@@ -87,16 +87,24 @@ evoctl set mute 1 -t output
 evoctl set phantom 1 -t input1
 evoctl set monitor 50              # EVO 4 only - 0=input, 100=playback
 evoctl mixer input1 --volume -6 --pan 0
+evoctl mixer output1_2 --volume 0 --mix-output 0
+evoctl --device evo8 mixer output5_6 --volume 0 --mix-output 0
 evoctl status
 evoctl save / load
-evoctl diag                        # works without device connected
+evoctl --help
+evoctl --device evo4 --help
+evoctl --device evo8 --help
 evoctl --device evo8 set volume -20  # when multiple devices connected
 evotui                             # TUI
 ```
 
-Use `-t` to target specific channels (e.g. `-t input3`, `-t output2`). See `evoctl --help` for all options.
+Use `-t` to target specific channels (e.g. `-t input3`, `-t output2`).
+See `evoctl --help` for all options.
 
-Mixer settings are write-only and auto-saved to `~/.config/audient-evo-py/`. Device controls can be saved/loaded via `evoctl save/load` or TUI.
+Mixer settings are write-only and auto-saved to `~/.config/audient-evo-py/`.
+Mixer `inputN` and `outputN_M` commands select a USB output source; `--mix-output`
+selects the mixer destination bus. Device controls can be saved/loaded via
+`evoctl save/load` or TUI.
 
 ## Design
 

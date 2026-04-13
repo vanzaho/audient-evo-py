@@ -5,12 +5,21 @@ Device-agnostic: use --device evo4|evo8|auto to select the target.
 """
 
 import time
+from contextlib import contextmanager
+from unittest.mock import patch
+
 import pytest
 
-from evo.controller import EVOController, _db_to_usb, _usb_to_db, _MIXER_DB_MIN
+from evo.controller import EVOController, _db_to_usb, _usb_to_db, _MIXER_DB_MIN, _MIXER_DB_MAX
+from evo.devices import EVO4, EVO8
 
 
 SETTLE_TIME = 0.05  # seconds to wait after SET before GET
+
+
+def _controller(spec):
+    with patch("evo.controller.exists", return_value=True):
+        return EVOController(spec)
 
 
 # --- Conversion helpers ---
@@ -411,6 +420,85 @@ class TestPanLaw:
         l, r = EVOController._pan_to_lr_db(_MIXER_DB_MIN, 0.0)
         assert l == _MIXER_DB_MIN
         assert r == _MIXER_DB_MIN
+
+    def test_pan_clamps_to_range(self):
+        assert EVOController._pan_to_lr_db(0.0, -200.0) == EVOController._pan_to_lr_db(
+            0.0, -100.0
+        )
+        assert EVOController._pan_to_lr_db(0.0, 200.0) == EVOController._pan_to_lr_db(
+            0.0, 100.0
+        )
+
+
+class TestMixerValidation:
+    @pytest.mark.parametrize("spec", [EVO4, EVO8])
+    def test_invalid_mix_output(self, spec):
+        evo = _controller(spec)
+        for mix_output in (-1, spec.num_output_pairs):
+            with pytest.raises(ValueError, match="mix_output"):
+                evo.set_mixer_input(1, 0.0, mix_output=mix_output)
+            with pytest.raises(ValueError, match="mix_output"):
+                evo.set_mixer_output(0.0, mix_output=mix_output)
+
+    @pytest.mark.parametrize("spec", [EVO4, EVO8])
+    def test_invalid_output_pair(self, spec):
+        evo = _controller(spec)
+        for output_pair in (-1, (spec.mixer_inputs - spec.num_inputs) // 2):
+            with pytest.raises(ValueError, match="output_pair"):
+                evo.set_mixer_output(0.0, output_pair=output_pair)
+
+    @pytest.mark.parametrize(
+        ("spec", "mix_output", "expected"),
+        [(EVO4, 0, [0, 1]), (EVO8, 1, [2, 3])],
+    )
+    def test_input_crosspoints(self, spec, mix_output, expected):
+        evo = _controller(spec)
+        calls = []
+        evo.set_mixer_crosspoint = lambda cn, db: calls.append((cn, db))
+
+        evo.set_mixer_input(1, -6.0, 0.0, mix_output=mix_output)
+
+        assert [cn for cn, _ in calls] == expected
+        assert [db for _, db in calls] == pytest.approx([-9.0103, -9.0103], abs=0.01)
+
+    @pytest.mark.parametrize(
+        ("spec", "output_pair", "mix_output", "expected"),
+        [
+            (EVO4, 0, 0, [4, 5, 6, 7]),
+            (EVO4, 1, 0, [8, 9, 10, 11]),
+            (EVO8, 2, 1, [34, 35, 38, 39]),
+        ],
+    )
+    def test_output_crosspoints(self, spec, output_pair, mix_output, expected):
+        evo = _controller(spec)
+        calls = []
+        evo.set_mixer_crosspoint = lambda cn, db: calls.append((cn, db))
+
+        evo.set_mixer_output(-6.0, output_pair=output_pair, mix_output=mix_output)
+
+        assert [cn for cn, _ in calls] == expected
+        assert [db for _, db in calls] == pytest.approx(
+            [-6.0, _MIXER_DB_MIN, _MIXER_DB_MIN, -6.0]
+        )
+
+    @pytest.mark.parametrize(
+        ("db", "clamped"),
+        [(999.0, _MIXER_DB_MAX), (-999.0, _MIXER_DB_MIN)],
+    )
+    def test_crosspoint_volume_clamps(self, db, clamped):
+        evo = _controller(EVO4)
+
+        @contextmanager
+        def device():
+            yield object()
+
+        evo._device = device
+        with patch("evo.controller.kmod.set_cur") as mock_set_cur:
+            evo.set_mixer_crosspoint(0, db)
+
+        assert mock_set_cur.call_args.kwargs["data"] == _db_to_usb(clamped).to_bytes(
+            2, "little"
+        )
 
 
 # --- Mixer integration tests (hardware) ---

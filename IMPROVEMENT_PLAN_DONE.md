@@ -1,76 +1,51 @@
-# Completed Improvement Tasks
+# Done
 
-## Phase 1 - Stabilize Shared Contracts
+## Task 1: One mixer state schema
 
-### Task 1: Define one mixer state schema
-
-Implemented a single versioned mixer shadow schema in `evo.config`:
-
-- top-level `version`
-- top-level `buses`
-- per bus: `inputs`, `outputs`, and `loopback`
-- per output: explicit zero-based `output_pair`, `volume`, `pan_l`, and `pan_r`
+State:
+- `evo.config` owns versioned mixer shadow schema.
+- v1: `version`, `buses`; per bus: `inputs`, `outputs`, `loopback`; per output: `output_pair`, `volume`, `pan_l`, `pan_r`.
+- No legacy mixer-state compatibility.
 
 Why:
-- The previous persisted mixer state had three incompatible forms: EVO 4 flat keys,
-  EVO 8 TUI `bus_*` keys, and CLI `name:bus` keys.
-- The canonical schema makes the bus and output-pair identity explicit, so config
-  save/load, auto-load, CLI, and TUI have one contract to target.
-- Backwards compatibility was intentionally not preserved because the active plan
-  called for dropping the legacy mixer state formats.
+- Old state forms conflicted: EVO 4 flat keys, EVO 8 TUI `bus_*`, CLI `name:bus`.
+- New state makes bus/output identity explicit for save/load/autoload/CLI/TUI.
 
-Actual changes:
-- Added `MIXER_STATE_VERSION`, `default_mixer_state()`, and schema checks to
-  `evo/config.py`.
-- Made `save_mixer_state()` and `load_mixer_state()` round-trip only the canonical
-  mixer state.
-- Updated `config.apply()` to apply canonical mixer state across all buses and
-  output pairs.
-- Updated the current CLI mixer save path to write the canonical schema.
-- Updated the TUI load/save adapters to read/write the canonical schema while
-  keeping its existing internal UI state names.
-- Added no-hardware config tests for schema shape and round-trip persistence.
+Changed:
+- `MIXER_STATE_VERSION`, `default_mixer_state()`, schema checks.
+- Canonical `save_mixer_state()` / `load_mixer_state()`.
+- `config.apply()` uses canonical buses/output pairs.
+- CLI save path writes canonical state.
+- TUI adapters read/write canonical state.
+- No-hardware config tests.
 
 Verified:
 - `python -m pytest tests/test_config.py`
 - `python -m pytest tests/test_config.py tests/test_devices.py`
 - `python -m py_compile evo/config.py evoctl.py evotui.py tests/test_config.py`
 
-### Task 2: Use shared mixer state in CLI and TUI
+## Task 2: Shared mixer state in CLI/TUI
 
-Implemented the shared mixer state work, adjusted to remove `loopback` as a
-separate mixer route:
-
-- The mixer shadow schema is now version 2.
-- Top-level mixer state uses `mix_outputs` for mixer destinations.
-- Each mix output contains `inputs` and `outputs`.
-- `outputs` are stereo USB output source pairs such as `output1_2`, `output3_4`,
-  and `output5_6`.
-- EVO 4's single mixer destination is keyed by its loopback capture pair
-  (`mix3_4`); EVO 8 destinations are `mix1_2` and `mix3_4`.
+State:
+- Mixer schema v2.
+- Top level: `mix_outputs`.
+- Each mix output: `inputs`, `outputs`.
+- Output sources: `output1_2`, `output3_4`, `output5_6`.
+- Mixer destinations: EVO 4 `mix3_4`; EVO 8 `mix1_2`, `mix3_4`.
+- Loopback is final stereo USB output source, not separate route.
 
 Why:
-- The previous Task 1 schema still treated `loopback` as a separate peer of
-  `outputs`, but the hardware model is simpler: the device loopback path is just
-  the final stereo USB output source pair (`output3_4` on EVO 4, `output5_6` on
-  EVO 8).
-- Separating `outputs` from `mix_outputs` avoids the old mixer-destination ambiguity:
-  output source identity and mixer destination identity are now explicit.
+- Removes destination/source ambiguity.
+- Matches hardware model better than separate `loopback` branch.
 
-Actual changes:
-- Added shared mixer helpers to `evo/config.py` for output source keys,
-  mix-output keys, default state, loading defaults, flat views, and route updates.
-- Updated `config.apply()` to restore `mix_outputs[*].inputs` and
-  `mix_outputs[*].outputs` without a special loopback branch.
-- Changed `EVOController.set_mixer_output()` to route every stereo USB output
-  source pair, including the final loopback-labeled pair.
-- Removed the old loopback-specific controller wrapper.
-- Updated `evoctl mixer` to expose `output1_2`, `output3_4`, and `output5_6`
-  commands, with `--mix-output` as the only mixer destination selector.
-- Updated `evotui` to hold canonical mixer state directly instead of translating
-  through private `main` / `loopback` adapter keys.
-- Updated no-hardware config tests, hardware test call sites, and EVO 8 dev notes
-  to use the new output-source model.
+Changed:
+- Shared config helpers for output keys, mix-output keys, defaults, load defaults, flat views, route updates.
+- `config.apply()` restores `mix_outputs[*].inputs` and `mix_outputs[*].outputs`.
+- `EVOController.set_mixer_output()` routes all stereo USB output source pairs.
+- Removed loopback-specific controller wrapper.
+- `evoctl mixer`: `output1_2`, `output3_4`, `output5_6`, `--mix-output`.
+- `evotui`: canonical state directly.
+- Tests/dev notes updated for output-source model.
 
 Verified:
 - `PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider tests/test_config.py`
@@ -79,3 +54,42 @@ Verified:
 - `PYTHONDONTWRITEBYTECODE=1 python evoctl.py --device evo8 mixer --help`
 - `PYTHONDONTWRITEBYTECODE=1 python evoctl.py --device evo8 mixer output5_6 --help`
 - `PYTHONDONTWRITEBYTECODE=1 python evoctl.py --device evo4 mixer --help`
+
+## Task 3: Mixer address validation
+
+State:
+- `EVOController` bounds-checks mixer destinations and USB output-source pairs.
+- Mixer pan is clamped to `[-100, 100]`.
+- Mixer crosspoint volume is clamped to `[-128, 6]` dB.
+
+Changed:
+- Added no-hardware controller tests for invalid `mix_output`.
+- Added no-hardware controller tests for invalid `output_pair`.
+- Added crosspoint tests for EVO 4 `output1_2`, EVO 4 `output3_4`, and EVO 8 `output5_6`.
+- Added clamping tests for pan and mixer crosspoint volume.
+
+Verified:
+- `PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider tests/test_controller.py -k 'DbConversions or PanLaw or MixerValidation'`
+
+## Tasks 4, 5, 6, 6.5: CLI help/runtime/routes/diag
+
+State:
+- `evoctl --help` prints global help without opening or detecting hardware.
+- `evoctl --device evo4 --help` and `evoctl --device evo8 --help` stay device-specific.
+- CLI commands run inside one `EVOController` context.
+- `diag` is no longer an `evoctl` command; dev diagnostics live under `dev/`.
+
+Changed:
+- Split global parser setup from device-specific parser setup.
+- Added parser/runtime tests for help, context lifetime, and EVO 8 mixer output-source routes.
+- Documented `--mix-output` as mixer destination and removed `evoctl diag` from README.
+- Moved diagnostics from `evo/diag.py` to `dev/diag.py` with `dev/diag.sh` wrapper.
+
+Verified:
+- `PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider tests/test_evoctl.py`
+- `python -B -c "import ast, pathlib; [ast.parse(pathlib.Path(p).read_text(), filename=p) for p in ['evoctl.py','tests/test_controller.py','tests/test_evoctl.py','dev/diag.py']]"`
+- `PYTHONDONTWRITEBYTECODE=1 python evoctl.py --help`
+- `PYTHONDONTWRITEBYTECODE=1 python evoctl.py --device evo4 --help`
+- `PYTHONDONTWRITEBYTECODE=1 python evoctl.py --device evo8 --help`
+- `PYTHONDONTWRITEBYTECODE=1 python evoctl.py --device evo8 mixer output5_6 --help`
+- `PYTHONDONTWRITEBYTECODE=1 dev/diag.sh`

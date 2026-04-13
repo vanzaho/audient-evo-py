@@ -20,7 +20,22 @@ def _resolve_device():
     sys.exit(1)
 
 
-def parse_args(spec):
+def _global_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Audient EVO config tool.",
+        epilog=(
+            "Use --device evo4 --help or --device evo8 --help for device-specific "
+            "commands."
+        ),
+    )
+    parser.add_argument(
+        "--device", "-d", choices=list(DEVICES.keys()), default=None,
+        help="Device to control (auto-detected if only one connected).",
+    )
+    return parser
+
+
+def parse_args(spec, argv=None):
     input_targets = [f"input{i+1}" for i in range(spec.num_inputs)]
     if spec.num_output_pairs == 1:
         mute_targets = input_targets + ["output"]
@@ -32,11 +47,8 @@ def parse_args(spec):
         parameters.insert(3, "monitor")
     cf = cfg.config_file(spec.name)
 
-    parser = argparse.ArgumentParser(description=f"Audient {spec.display_name} config tool.")
-    parser.add_argument(
-        "--device", "-d", choices=list(DEVICES.keys()), default=None,
-        help="Device to control (auto-detected if only one connected).",
-    )
+    parser = _global_parser()
+    parser.description = f"Audient {spec.display_name} config tool."
     sparser = parser.add_subparsers(dest="action", required=True)
 
     get_p = sparser.add_parser("get", aliases=["g"], help="Get device param.")
@@ -110,7 +122,7 @@ def parse_args(spec):
             help=_MIX_OUTPUT_HELP,
         )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.action in ("status", "save", "load", "mixer", "m"):
         return args
@@ -122,10 +134,12 @@ def parse_args(spec):
                     args.value = float(args.value)
                 except ValueError:
                     parser.error(f"{args.parameter} value must be a number.")
-                if args.parameter == "volume" and not (spec.vol_db_min <= args.value <= spec.vol_db_max):
-                    parser.error(f"Volume must be between {spec.vol_db_min:.0f} and {spec.vol_db_max:.0f} dB.")
-                if args.parameter == "gain" and not (spec.gain_db_min <= args.value <= spec.gain_db_max):
-                    parser.error(f"Gain must be between {spec.gain_db_min:.0f} and {spec.gain_db_max:.0f} dB.")
+                if args.parameter == "volume":
+                    lo, hi, label = spec.vol_db_min, spec.vol_db_max, "Volume"
+                else:
+                    lo, hi, label = spec.gain_db_min, spec.gain_db_max, "Gain"
+                if not lo <= args.value <= hi:
+                    parser.error(f"{label} must be between {lo:.0f} and {hi:.0f} dB.")
             else:  # monitor
                 try:
                     args.value = int(args.value)
@@ -313,28 +327,25 @@ _USB_ERRORS = {
     errno.ETIMEDOUT: "USB timeout - try unplugging and replugging the device.",
 }
 
-def main():
-    # Handle 'diag' before device resolution (works without any device)
-    if len(sys.argv) > 1 and sys.argv[1] == "diag":
-        import json
-        from evo.diag import collect_diagnostics
-        print(json.dumps(collect_diagnostics(), indent=2))
-        return
-
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     # Pre-parse --device before building full parser (need spec for choices)
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--device", "-d", choices=list(DEVICES.keys()), default=None)
-    pre_args, _ = pre.parse_known_args()
+    pre_args, _ = pre.parse_known_args(argv)
 
     if pre_args.device:
         spec = DEVICES[pre_args.device]
+    elif argv in (["--help"], ["-h"]):
+        _global_parser().parse_args(argv)
+        return
     else:
         spec = _resolve_device()
 
-    args = parse_args(spec)
+    args = parse_args(spec, argv)
     try:
-        evo = EVOController(spec)
-        _run(args, evo)
+        with EVOController(spec) as evo:
+            _run(args, evo)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
