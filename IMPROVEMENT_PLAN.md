@@ -4,34 +4,9 @@ This plan converts the project assessment into implementation-ready tasks. The
 order is intentional: fix shared contracts first, then user-facing behavior,
 then tooling and documentation.
 
-The architecture, code and documentation needs to be as unambiguous, minimal and readable as it can be with respect to the implemented features.
+VERY IMPORTANT!: The architecture, code and documentation needs to be as unambiguous, minimal and readable as it can be with respect to the implemented features.
 
 ## Phase 1 - Stabilize Shared Contracts
-
-### Task 1: Define one mixer state schema
-
-Goal: make CLI, TUI, config save/load, and auto-load use the same mixer state.
-
-Files:
-- `evo/config.py`
-- `evoctl.py`
-- `evotui.py`
-- `tests/`
-
-Implementation:
-- Add a unified mixer state shape, for example:
-  - `version`
-  - `buses`
-  - per bus: `inputs`, `outputs`, `loopback`
-  - per output: `output_pair`, `volume`, `pan_l`, `pan_r`
--  The existing forms should be unified in this shape:
-  - EVO 4 flat keys: `input1`, `output`, `loopback`
-  - EVO 8 TUI keys: `bus_0`, `bus_1`, `output_pair1`
-  - CLI keys: `input1:1`, `output:1`, `loopback:1`
-- Do not try to preserve back-compatibility
-
-Acceptance checks:
-- New state round-trips through `save_mixer_state()` and `load_mixer_state()`.
 
 ### Task 2: Use shared mixer state in CLI and TUI
 
@@ -44,10 +19,9 @@ Files:
 
 Implementation:
 - Move mixer get/update helpers into `evo.config`.
-- Replace CLI direct dict mutation with shared update helpers.
-- Replace TUI `_load_mixer_state()` and `_save_mixer_state()` format-specific logic
+- Replace remaining CLI direct canonical dict mutation with shared update helpers.
+- Replace remaining TUI `_load_mixer_state()` and `_save_mixer_state()` adapter logic
   with shared helpers.
-- Ensure `config.apply()` applies every bus and every output pair.
 
 Acceptance checks:
 - Set EVO 8 bus 1 values in CLI, open TUI, values appear on bus 1.
@@ -416,24 +390,23 @@ Acceptance checks:
 
 ## Suggested Implementation Order
 
-1. Task 1 - Define one mixer state schema.
-2. Task 2 - Use shared mixer state in CLI and TUI.
-3. Task 3 - Add controller validation for mixer addressing.
-4. Task 4 - Make global CLI help work without hardware.
-5. Task 5 - Use a shared fd for CLI operations.
-6. Task 6 and 6.5 - Expose all EVO 8 mixer routes in the CLI.
-7. Task 11 - Add reproducible dev/test dependencies.
-8. Task 12 - Mark and isolate hardware/audio/manual tests.
-9. Task 13 - Preserve user mixer state in audio tests.
-10. Task 9 - Pick one WirePlumber default sink strategy and apply it everywhere.
-11. Task 10 - Make WirePlumber node matching less brittle.
-12. Task 7 - Fix open-file lifetime on disconnect.
-13. Task 8 - Review zero-length and ioctl edge cases.
-14. Task 15 - Add atomic config writes and clearer config errors.
-15. Task 14 - Split the TUI into smaller modules.
-16. Task 16 - Refresh user-facing docs.
-17. Task 17 and 17.5 - Refresh architecture docs.
-18. Task 18 - Repair or archive dev probe scripts.
+1. Task 2 - Use shared mixer state in CLI and TUI.
+2. Task 3 - Add controller validation for mixer addressing.
+3. Task 4 - Make global CLI help work without hardware.
+4. Task 5 - Use a shared fd for CLI operations.
+5. Task 6 and 6.5 - Expose all EVO 8 mixer routes in the CLI.
+6. Task 11 - Add reproducible dev/test dependencies.
+7. Task 12 - Mark and isolate hardware/audio/manual tests.
+8. Task 13 - Preserve user mixer state in audio tests.
+9. Task 9 - Pick one WirePlumber default sink strategy and apply it everywhere.
+10. Task 10 - Make WirePlumber node matching less brittle.
+11. Task 7 - Fix open-file lifetime on disconnect.
+12. Task 8 - Review zero-length and ioctl edge cases.
+13. Task 15 - Add atomic config writes and clearer config errors.
+14. Task 14 - Split the TUI into smaller modules.
+15. Task 16 - Refresh user-facing docs.
+16. Task 17 and 17.5 - Refresh architecture docs.
+17. Task 18 - Repair or archive dev probe scripts.
 
 ## Notes
 

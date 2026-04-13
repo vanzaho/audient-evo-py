@@ -224,21 +224,25 @@ def _run(args, evo: EVOController):
             print(f"[SET] Phantom 48V {args.target}: {'on' if args.value else 'off'}")
 
     elif args.action in ("mixer", "m"):
-        from evo.config import load_mixer_state, save_mixer_state
+        from evo.config import default_mixer_state, load_mixer_state, save_mixer_state
 
         sec = args.mixer_section
         mix_bus = getattr(args, "mix_bus", 0)
-        state = load_mixer_state(spec.name) or {}
-        state_key = f"{sec}:{mix_bus}" if mix_bus else sec
+        state = load_mixer_state(spec.name) or default_mixer_state(spec)
+        bus = state["buses"][mix_bus]
         if sec.startswith("input"):
             num = int(sec[-1])
             evo.set_mixer_input(num, args.volume, args.pan, mix_bus)
-            state[state_key] = {"volume": args.volume, "pan": args.pan}
+            bus["inputs"][sec] = {"volume": args.volume, "pan": args.pan}
             bus_suffix = f" (bus {mix_bus})" if mix_bus else ""
-            print(f"[SET] Mixer {sec}{bus_suffix}: volume={args.volume:+.1f} dB, pan={args.pan:+.0f}")
+            print(
+                f"[SET] Mixer {sec}{bus_suffix}: volume={args.volume:+.1f} dB, "
+                f"pan={args.pan:+.0f}"
+            )
         elif sec == "output":
             evo.set_mixer_output(args.volume, args.pan_l, args.pan_r, mix_bus=mix_bus)
-            state[state_key] = {
+            bus["outputs"]["output_pair1"] = {
+                "output_pair": 0,
                 "volume": args.volume,
                 "pan_l": args.pan_l,
                 "pan_r": args.pan_r,
@@ -250,7 +254,7 @@ def _run(args, evo: EVOController):
             )
         elif sec == "loopback":
             evo.set_mixer_loopback(args.volume, args.pan_l, args.pan_r, mix_bus)
-            state[state_key] = {
+            bus["loopback"] = {
                 "volume": args.volume,
                 "pan_l": args.pan_l,
                 "pan_r": args.pan_r,

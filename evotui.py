@@ -409,43 +409,43 @@ class EvoTUI:
         data = cfg.load_mixer_state(self.spec.name)
         if data is None:
             return
-        if self.spec.num_output_pairs == 1:
-            # EVO 4: single bus, data maps 'output' -> 'main'
-            bus = self._mixer_state[0]
+        for b, bus_data in enumerate(data["buses"][: self.spec.num_output_pairs]):
+            bus = self._mixer_state[b]
             for i in range(self.spec.num_inputs):
                 key = f"input{i + 1}"
-                if key in data:
-                    bus[key].update(data[key])
-            if "output" in data:
-                bus["main"].update(data["output"])
-            if "loopback" in data:
-                bus["loopback"].update(data["loopback"])
-        else:
-            # EVO 8: per-bus data stored under "bus_0", "bus_1" keys
-            for b in range(self.spec.num_output_pairs):
-                bus_data = data.get(f"bus_{b}", {})
-                bus = self._mixer_state[b]
-                for key in bus:
-                    if key in bus_data:
-                        bus[key].update(bus_data[key])
+                if key in bus_data["inputs"]:
+                    bus[key].update(bus_data["inputs"][key])
+
+            outputs = bus_data["outputs"]
+            if self.spec.num_output_pairs == 1:
+                if "output_pair1" in outputs:
+                    bus["main"].update(outputs["output_pair1"])
+            else:
+                for pair in range(self.spec.num_output_pairs):
+                    key = f"output_pair{pair + 1}"
+                    if key in outputs:
+                        bus[key].update(outputs[key])
+
+            bus["loopback"].update(bus_data["loopback"])
 
     def _save_mixer_state(self):
         """Persist TUI mixer state to disk."""
-        if self.spec.num_output_pairs == 1:
-            # EVO 4: single bus, map 'main' -> 'output'
-            bus = self._mixer_state[0]
-            data = {}
+        data = cfg.default_mixer_state(self.spec)
+        for b in range(self.spec.num_output_pairs):
+            bus = self._mixer_state[b]
+            state_bus = data["buses"][b]
             for i in range(self.spec.num_inputs):
                 key = f"input{i + 1}"
-                data[key] = dict(bus[key])
-            data["output"] = dict(bus["main"])
-            data["loopback"] = dict(bus["loopback"])
-        else:
-            # EVO 8: per-bus
-            data = {}
-            for b in range(self.spec.num_output_pairs):
-                bus = self._mixer_state[b]
-                data[f"bus_{b}"] = {k: dict(v) for k, v in bus.items()}
+                state_bus["inputs"][key] = dict(bus[key])
+
+            if self.spec.num_output_pairs == 1:
+                state_bus["outputs"]["output_pair1"].update(bus["main"])
+            else:
+                for pair in range(self.spec.num_output_pairs):
+                    key = f"output_pair{pair + 1}"
+                    state_bus["outputs"][key].update(bus[key])
+
+            state_bus["loopback"].update(bus["loopback"])
         cfg.save_mixer_state(self.spec.name, data)
 
     # -- mixer actions --
