@@ -1,89 +1,81 @@
-# EVO4 Audio Setup — PipeWire + WirePlumber
+# EVO Audio Setup - PipeWire + WirePlumber
 
 Arch Linux, PipeWire 1.6+, WirePlumber 0.5+.
 
-## The Problem
+## Problem
 
-The EVO4 exposes 4 USB audio channels but has only 2 physical inputs and 2 physical
-outputs. The 4 channels map as:
+EVO devices expose extra USB audio channels for output pairs and loopback. Without
+configuration, PipeWire can expose the raw ALSA device as surround and send stereo
+app audio to channels that should stay available for routing.
 
-- CH1/CH2 (FL/FR) - main output / mic input
-- CH3/CH4 (RL/RR) - device loopback bus (output feeds back into capture)
+| Device | Playback USB channels | Capture USB channels |
+|--------|-----------------------|----------------------|
+| EVO 4 | CH1/2 main output, CH3/4 loopback output | CH1/2 mic/line, CH3/4 loopback capture |
+| EVO 8 | CH1/2 main output, CH3/4 output 3+4, CH5/6 loopback output | CH1/2 mic/line 1+2, CH3/4 mic/line 3+4, CH5/6 loopback capture |
 
-Without configuration, PipeWire sees a "Surround 4.0" device and upmixes stereo
-audio across all 4 channels, causing volume and channel-mapping issues.
+## Strategy
 
-## Signal Flow
+`wireplumber/install.sh` prompts for `evo4` or `evo8`, installs the matching
+PipeWire loopback config, installs WirePlumber ALSA rules, restarts the audio
+stack, and sets default devices.
 
-### Playback
+Default sink strategy:
 
-```
-Application (stereo)
-    |
-    v
-alsa_output.usb-Audient_EVO4-00.analog-surround-40  (raw ALSA 4ch sink)
-    channelmix.upmix = false  ->  stereo apps only write FL/FR (CH1/CH2)
-    |
-    v
-EVO4 DAC -> Headphones / Speakers
+- EVO 4: `evo4_main_output` is the default app sink.
+- EVO 8: `evo8_main_output` is the default app sink.
+- Secondary output sinks and loopback sinks are explicit, not defaults.
+- `51-evo*.conf` disables upmix on the raw ALSA sink so direct connections do not fill extra channels.
 
-evo4_loopback_output (virtual 2ch sink, loopback module)
-    |
-    v
-alsa_output  [CH3/CH4 - RL/RR]  ->  EVO4 loopback bus input
-```
+## Nodes
 
-### Capture
+| Device | Main sink | Extra sinks | Sources |
+|--------|-----------|-------------|---------|
+| EVO 4 | `evo4_main_output` | `evo4_loopback_output` | `evo4_mic`, `evo4_loopback_capture` |
+| EVO 8 | `evo8_main_output` | `evo8_output_3_4`, `evo8_loopback_output` | `evo8_mic_1_2`, `evo8_mic_3_4`, `evo8_loopback_capture` |
 
-```
-EVO4 ADC <- Mic/Line inputs (physical)
-    |
-    v
-alsa_input.usb-Audient_EVO4-00.analog-surround-40  (raw ALSA 4ch source)
-    |
-    +-- CH1/CH2 (FL/FR) --> evo4_mic             (virtual 2ch source, physical mics)
-    +-- CH3/CH4 (RL/RR) --> evo4_loopback_capture (virtual 2ch source, loopback bus)
-```
+## Files
 
-## Config Files
+| Source | Install location | Purpose |
+|--------|------------------|---------|
+| `wireplumber/evo4/evo4-stereo.conf` or `wireplumber/evo8/evo8-stereo.conf` | `~/.config/pipewire/pipewire.conf.d/` | Defines the main, extra output, mic, and loopback nodes |
+| `wireplumber/evo4/51-evo4.conf` or `wireplumber/evo8/51-evo8.conf` | `~/.config/wireplumber/wireplumber.conf.d/` | Disables idle suspension, disables upmix, renames raw ALSA nodes |
+| `wireplumber/alsa-soft-mixer.conf` | `~/.config/wireplumber/wireplumber.conf.d/` | Software volume on ALSA devices |
+| `wireplumber/evo4/evo4-setup.sh` or `wireplumber/evo8/evo8-setup.sh` | `~/.local/bin/` | Re-applies default sink/source after reconnect |
+| `wireplumber/evo4/evo4-setup.service` or `wireplumber/evo8/evo8-setup.service` | `~/.config/systemd/user/` | Runs the setup script at login |
 
-| File | Install location | Purpose |
-|------|-----------------|---------|
-| `evo4-stereo.conf` | `~/.config/pipewire/pipewire.conf.d/` | Three loopback modules: `evo4_loopback_output`, `evo4_mic`, `evo4_loopback_capture` |
-| `51-evo4.conf` | `~/.config/wireplumber/wireplumber.conf.d/` | Disables idle suspension (prevents clicks), disables upmix on output, renames ALSA nodes |
-| `alsa-soft-mixer.conf` | `~/.config/wireplumber/wireplumber.conf.d/` | Software volume on all ALSA devices for consistent behavior |
-| `evo4-setup.sh` | `~/.local/bin/` | Sets EVO4 nodes as default sink/source via `wpctl` |
-| `evo4-setup.service` | `~/.config/systemd/user/` | Runs `evo4-setup.sh` at login |
-
-## Volume Control
-
-Two independent layers:
-
-- **Software (PipeWire):** `wpctl set-volume`, `pavucontrol` - digital, reduces bit depth
-- **Hardware (EVO4):** physical knob or `evoctl.py set volume <0-100>` - analog, preserves bit depth
-
-For best quality: keep PipeWire at 100%, use the hardware knob or `evoctl`.
-
-## Installation
+## Install
 
 ```bash
-bash wireplumber/evo4-setup-install.sh
+bash wireplumber/install.sh
 ```
 
-Backs up existing configs, installs all files, restarts the audio stack, and sets defaults.
-
-To apply defaults manually (e.g. after reconnecting the device):
+The installer backs up existing config to `~/.config/evo-audio-backup/`, installs
+the selected device files, restarts PipeWire/WirePlumber, and sets defaults. Run
+the installed setup script again after reconnecting the device if defaults are
+missing:
 
 ```bash
 evo4-setup.sh
+evo8-setup.sh
 ```
+
+## Volume
+
+Two independent layers:
+
+- PipeWire software volume: `wpctl set-volume`, `pavucontrol`.
+- EVO hardware volume: physical knob or `evoctl set volume -20`.
+
+For best quality, keep PipeWire near 100% and use the EVO hardware volume for
+normal listening level.
 
 ## Troubleshooting
 
 ```bash
-wpctl status                      # check default sink/source (marked with *)
-pw-cli dump Node | grep -A5 evo4  # verify node properties
+wpctl status                      # check default sink/source, marked with *
+pactl info | grep 'Default Sink'  # check the default sink name
+pw-cli dump Node | grep -A5 evo   # verify node properties
 pw-top                            # live PipeWire graph activity
 lsusb | grep Audient              # confirm USB connection
-aplay -l | grep EVO4              # confirm ALSA sees the device
+aplay -l | grep EVO               # confirm ALSA sees the device
 ```

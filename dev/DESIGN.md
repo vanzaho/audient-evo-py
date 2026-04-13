@@ -1,4 +1,4 @@
-# Design - Audient EVO4 Linux Controller
+# Design - Audient EVO Linux Controller
 
 Architecture and reverse-engineered findings.
 
@@ -6,18 +6,19 @@ Architecture and reverse-engineered findings.
 
 ## Problem
 
-The Audient EVO4 exposes its mixer controls (volume, gain, mute, monitor mix)
-through USB control transfers on endpoint 0. On Linux, `snd-usb-audio` claims
-the audio interfaces and the usbfs layer blocks userspace from sending control
-transfers to a kernel-owned device. The vendor control app is Windows/macOS only.
+Audient EVO interfaces expose their mixer controls (volume, gain, mute, monitor
+mix, phantom power, MU60 mixer routes) through USB control transfers on endpoint
+0. On Linux, `snd-usb-audio` claims the audio interfaces and the usbfs layer
+blocks userspace from sending control transfers to a kernel-owned device. The
+vendor control app is Windows/macOS only.
 
 ## Solution
 
-`evo4_raw` is a minimal out-of-tree kernel module that:
+`evo_raw` is a minimal out-of-tree kernel module that:
 
 1. Binds to **interface 3** (DFU, left unclaimed by `snd-usb-audio`)
 2. Uses that binding solely to obtain a `usb_device` handle
-3. Exposes `/dev/evo4` as a misc device with a single ioctl
+3. Exposes `/dev/evo4` or `/dev/evo8` as a misc device with a single ioctl
 4. Forwards USB control transfers through `usb_control_msg()`
 
 This works because `usb_control_msg()` operates on endpoint 0 (the default
@@ -32,22 +33,23 @@ interfaces, so `snd-usb-audio` continues streaming undisturbed.
 |                                                          |
 | +----------+     +----------------+     +--------------+ |
 | | evoctl.py|---->|controller.py   |---->|kmod.py       | |
-| | (CLI)    |     |(EVO4Controller)|     |(ioctl wrapper| |
+| | evotui.py|     |(EVOController) |     |(ioctl wrapper| |
 | +----------+     +----------------+     +------+-------+ |
 |                                              |           |
-|                                  ioctl(fd, EVO4_CTRL_TRANSFER, buf)
+|                                  ioctl(fd, EVO_CTRL_TRANSFER, buf)
 |                                              |           |
 +----------------------------------------------+-----------+
 |                      Kernel                  |           |
 |                                              v           |
 |                                      +--------------+    |
-|                                      |  /dev/evo4   |    |
+|                                      | /dev/evo4    |    |
+|                                      | /dev/evo8    |    |
 |                                      |  (misc dev)  |    |
 |                                      +------+-------+    |
 |                                             |            |
 |                                             v            |
 |                                   +-------------------+  |
-|                                   |    evo4_raw.ko    |  |
+|                                   |    evo_raw.ko     |  |
 | +----------------+                | usb_control_msg() |  |
 | | snd-usb-audio  |                | on endpoint 0     |  |
 | | (iface 0-2)    |                +----------+--------+  |
@@ -56,19 +58,19 @@ interfaces, so `snd-usb-audio` continues streaming undisturbed.
 +---------+-------------------------------------+-----------+
 |         v              USB Bus               v           |
 | +---------------------------------------------------+    |
-| |              Audient EVO4 (USB Device)            |    |
+| |           Audient EVO 4/8 (USB Device)            |    |
 | |  Endpoint 0 (Control) <-- all control transfers   |    |
 | |  Interface 0 - Audio Control (UAC2 descriptors)   |    |
 | |  Interface 1 - Audio Streaming (playback)         |    |
 | |  Interface 2 - Audio Streaming (capture)          |    |
-| |  Interface 3 - DFU (unused, bound by evo4_raw)    |    |
+| |  Interface 3 - DFU (unused, bound by evo_raw)     |    |
 | +---------------------------------------------------+    |
 +----------------------------------------------------------+
 ```
 
 ## ioctl Protocol
 
-A single ioctl command `EVO4_CTRL_TRANSFER` carries all communication.
+A single ioctl command `EVO_CTRL_TRANSFER` carries all communication.
 The struct is identical in kernel and userspace (264 bytes, little-endian):
 
 | Field | Type | Description |
@@ -82,7 +84,7 @@ The struct is identical in kernel and userspace (264 bytes, little-endian):
 
 Python struct format: `"<BBHHH256s"` (264 bytes total).
 
-ioctl number: `_IOWR('E', 0, struct evo4_ctrl_xfer)` - read+write, type 'E',
+ioctl number: `_IOWR('E', 0, struct evo_ctrl_xfer)` - read+write, type 'E',
 number 0, size 264. Python: `(3 << 30) | (264 << 16) | (0x45 << 8) | 0`.
 
 ## USB Interfaces
@@ -92,7 +94,7 @@ number 0, size 264. Python: `(3 << 30) | (264 << 16) | (0x45 << 8) | 0`.
 | 0 | Audio Control | All entities (FU10, FU11, EU50-59, MU60) |
 | 1 | Audio Streaming | Output (playback) |
 | 2 | Audio Streaming | Input (recording) |
-| 3 | DFU | Device Firmware Update - claimed by evo4_raw kmod |
+| 3 | DFU | Device Firmware Update - claimed by evo_raw kmod |
 
 No HID interface. Front panel buttons/knob are internal to the device
 microcontroller and not exposed as USB controls.
@@ -257,21 +259,22 @@ R_dB = volume_dB + 20*log10(R_linear)
 - Full left (pan=-100): L = volume_dB, R = -128 dB (silence)
 - Full right (pan=+100): R = volume_dB, L = -128 dB (silence)
 
-## Status Struct
+## Status Blob
 
-`get_status_raw()` returns 12 bytes in format `"<hhhBBBBBB"`:
+`get_status_raw()` returns a compact per-device byte blob. `decode_status()`
+decodes it using the controller's `DeviceSpec`; it is not a single fixed struct
+for all devices.
+
+Packing order:
 
 | Offset | Type | Field | Notes |
 |--------|------|-------|-------|
-| 0 | int16 | vol_raw | FU10 CH1 raw USB value |
-| 2 | int16 | gain1_raw | FU11 CH1 raw USB value |
-| 4 | int16 | gain2_raw | FU11 CH2 raw USB value |
-| 6 | uint8 | mix_raw | EU56 raw value (0-127) |
-| 7 | uint8 | in1_mute | 0/1 |
-| 8 | uint8 | in2_mute | 0/1 |
-| 9 | uint8 | out_mute | 0/1 |
-| 10 | uint8 | in1_phantom | 0/1 |
-| 11 | uint8 | in2_phantom | 0/1 |
+| 0 | int16 | output1_raw | FU10 CH1 raw USB value |
+| 2 | int16[] | gain_raw | One FU11 raw value per input |
+| variable | uint8? | mix_raw | EVO 4 only: EU56 raw value (0-127) |
+| variable | int16[] | extra_output_raw | One FU10 raw value for each output pair after output1 |
+| variable | uint8[] | mute flags | Sorted controller mute targets |
+| variable | uint8[] | phantom flags | Sorted controller phantom targets |
 
 `decode_status()` converts to the same dict format as `config.snapshot()`.
 
@@ -301,7 +304,7 @@ R_dB = volume_dB + 20*log10(R_linear)
 1. **EU56 error state** - Sending GET_CUR to invalid CS/CN on EU56 can lock
    the unit. Only recoverable by USB re-plug. Use only CS=0 CN=0.
 
-2. **Rapid transfer storms** - Opening/closing `/dev/evo4` many times in
+2. **Rapid transfer storms** - Opening/closing `/dev/evo*` many times in
    fast succession (e.g., scan with per-command open) can cause USB STALL
    on all subsequent transfers. Use a single fd with delays between transfers.
 

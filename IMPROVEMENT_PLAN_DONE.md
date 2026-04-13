@@ -1,5 +1,112 @@
 # Done
 
+## Task 17.5: Codex agent docs
+
+State:
+- `AGENTS.md` now contains the current agent-facing project facts.
+- `CLAUDE.md` now only points to `AGENTS.md`, matching Claude convention.
+- The agent docs cover the important directory structure, Python and pipx command examples, build/install commands, test commands and markers, language-server/type-check commands, Ruff formatting commands, and the simplicity/readability conventions.
+
+Why:
+- Task 17 had already refreshed `CLAUDE.md` with the current EVO 4/EVO 8 project facts.
+- Task 17.5 needed that content moved into the agent-standard `AGENTS.md` file while keeping `CLAUDE.md` as a lightweight pointer.
+
+Changed:
+- Added `AGENTS.md`.
+- Replaced the detailed `CLAUDE.md` body with `See [AGENTS.md](AGENTS.md).`
+- Removed Task 17.5 from the remaining plan and left Task 18 as the only open task.
+
+Verified:
+- `git diff --check -- AGENTS.md CLAUDE.md IMPROVEMENT_PLAN.md IMPROVEMENT_PLAN_DONE.md`
+- Re-read `AGENTS.md`, `CLAUDE.md`, `IMPROVEMENT_PLAN.md`, and this done entry.
+
+Reassessed:
+- Task 18 remains valid but was tightened: `dev/probe.py` and `dev/probe_mixer.py` already import from `evo`, but still hard-code EVO 4 paths and EVO 4 wording. `dev/README.md` does not exist yet.
+
+## Task 17: Architecture docs refresh
+
+State:
+- Architecture docs now describe the shared `evo_raw` module and the current `evo` package instead of the old EVO 4-only names.
+- The architecture diagram shows both `/dev/evo4` and `/dev/evo8`, and names `EVOController`.
+- Status blob docs now describe the variable per-device packing decoded through `DeviceSpec`, rather than the old fixed 12-byte EVO 4 layout.
+- EVO 8 implementation notes include the current `DeviceSpec.has_monitor=False` field.
+- `CLAUDE.md` now points to `dev/DESIGN.md`, uses current CLI/TUI examples, and documents current opt-in test flags.
+
+Why:
+- Task 16 refreshed user docs, leaving the developer/agent-facing docs as the remaining stale surface.
+- Tasks 1-6.5 and EVO 8 work changed module/package names, device paths, controller naming, status packing, and test opt-in behavior.
+
+Changed:
+- Updated `dev/DESIGN.md` architecture, ioctl, module, device-node, and status blob sections.
+- Updated `dev/evo8-implementation.md` `DeviceSpec` snippet.
+- Rewrote `CLAUDE.md` around the current shared EVO 4/EVO 8 package layout and commands.
+- Reassessed the remaining plan: Task 17.5 should now copy the renewed `CLAUDE.md` into `AGENTS.md`; Task 18 is unaffected.
+
+Verified:
+- `git diff --check -- dev/DESIGN.md dev/evo8-implementation.md CLAUDE.md`
+- `rg -n "evo4_raw|EVO4Controller|evo4/controller|evo4/kmod|kmod/evo4_raw|Status Struct|EVO4_CTRL_TRANSFER|struct evo4_ctrl|12 bytes in format|<hhhBBBBBB" dev/DESIGN.md dev/evo8-implementation.md CLAUDE.md` returned no matches.
+- `python -B evoctl.py --device evo8 set volume --help`
+- `python -B evoctl.py --device evo8 mixer output3_4 --help`
+- `python -B evoctl.py --device evo8 --help`
+- Confirmed `AGENTS.md` does not exist yet, so Task 17.5 remains needed.
+
+## Task 16: User docs refresh
+
+State:
+- User docs now use current dB-based volume/gain examples.
+- README documents `--device`, mixer source keys, EVO 8 mixer destinations, and EVO 8 output/loopback routing.
+- WirePlumber docs cover both EVO 4 and EVO 8, reference the real `wireplumber/install.sh`, and describe the main-output default sink strategy.
+- WirePlumber reconnect scripts set the explicit `evo4_main_output` / `evo8_main_output` sinks as defaults, matching the docs and installer strategy.
+- EVO 8 testing docs keep the presumed single-EVO setup, mention `--device evo8` only for multi-device setups, and use the current opt-in hardware/audio/manual pytest flags.
+
+Why:
+- Tasks 11-13 changed dependency and test opt-in commands.
+- Tasks 1-3 changed mixer naming to `output1_2`, `output3_4`, `output5_6`, with `--mix-output` selecting the destination bus.
+- Current WirePlumber config defines explicit main-output nodes for both devices, so the docs should not describe the old EVO 4-only setup.
+
+Changed:
+- Updated README install, WirePlumber, usage, mixer, and test command sections.
+- Rewrote `wireplumber/README.md` around the current per-device configs and installer.
+- Updated `wireplumber/evo4/evo4-setup.sh` and `wireplumber/evo8/evo8-setup.sh` to use the explicit main-output nodes.
+- Updated `dev/EVO8-TESTING.md` install, mixer, and test-suite commands.
+
+Verified:
+- `python -B evoctl.py --help`
+- `python -B evoctl.py --device evo4 --help`
+- `python -B evoctl.py --device evo8 mixer --help`
+- `python -B evoctl.py --device evo8 mixer input1 --help`
+- `python -B evoctl.py --device evo8 mixer output1_2 --help`
+- `python -B evoctl.py --device evo8 mixer output5_6 --help`
+- `python -B evoctl.py --device evo4 mixer output3_4 --help`
+- `bash -n wireplumber/install.sh wireplumber/uninstall.sh wireplumber/evo4/evo4-setup.sh wireplumber/evo8/evo8-setup.sh`
+- `git diff --check`
+
+## Task 14: TUI compaction
+
+State:
+- `evotui.py` remains a single-file TUI after user direction to avoid splitting it for now.
+- The implementation is shorter and more direct, with no intentional behavior change.
+- Invalid mixer shadow state no longer crashes TUI startup; the TUI keeps defaults and reports a status error.
+
+Why:
+- The planned split was superseded by a request to first make clear, low-risk refactor/shortening wins while preserving behavior.
+- Keeping it single-file avoided package/install churn while still reducing the largest obvious duplication.
+
+Changed:
+- Removed unused drawing constants, helper methods, and slider-map state.
+- Added shared clamp and hint-rendering helpers.
+- Consolidated file-picker movement, two-column controls rendering, tab selection rendering, and demo-controller state setup.
+- Kept the `evotui` entry point stable.
+
+Verified:
+- `python -B -m py_compile evotui.py`
+- `python -B -c "from evotui import DemoController, EvoTUI; from evo.devices import DEVICES; [EvoTUI(DemoController(DEVICES[name])) for name in ('evo4','evo8')]; print('ok')"`
+- `python -B -c "import ast, pathlib; ast.parse(pathlib.Path('evotui.py').read_text(), filename='evotui.py'); print('ast ok')"`
+- `python -B -m pytest -p no:cacheprovider tests/test_evoctl.py`
+- `python -B evotui.py --help`
+- `python -B evotui.py --demo --device evo4` and `python -B evotui.py --demo --device evo8` started, showed the expected too-small-terminal message in the 80x24 test TTY, and exited cleanly with `q`.
+- `git diff --check`
+
 ## Task 15: Atomic config writes/errors
 
 State:

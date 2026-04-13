@@ -4,8 +4,10 @@ Help test EVO 8 step-by-step.
 
 ## Prerequisites
 
-- Audient EVO 8 
-- See `README.md` in root for requirements and install guide - for simplicity, treat all recommendations (except for DKMS) as requirements.
+- Audient EVO 8.
+- Run commands from the repository root unless a section says otherwise.
+- See `README.md` in root for requirements and install guide. Treat all recommendations except DKMS as requirements.
+- If you have more than one EVO connected, add `--device evo8` to `evoctl` and pytest commands.
 
 ## Install
 
@@ -17,10 +19,12 @@ lsmod | grep evo_raw            # should be loaded
 
 # evoctl
 pipx install .                  # provides evoctl and evotui commands
+pipx inject audient-evo pytest
+pipx inject audient-evo numpy sounddevice  # audio tests only
 
 # WirePlumber config (needed for mixer audio tests)
 bash wireplumber/install.sh     # select EVO 8 when prompted
-wpctl status | grep -i evo     # should show EVO 8 as default
+wpctl status | grep -i evo      # should show EVO 8 nodes and defaults
 ```
 
 ## Controls
@@ -98,17 +102,25 @@ evoctl mixer output1_2 --volume 0
 evoctl mixer output5_6 --volume -128
 ```
 
-Expected: mix is present on OUT 1|2
+Expected: mix is present on MIX 1|2.
 
-### Second mixer output (OUT 3/4)
+### Second mixer destination (MIX 3|4 / OUT 3|4)
 
 ```bash
 evoctl mixer input1 --volume 0 --pan 0 --mix-output 1
 evoctl mixer output1_2 --volume 0 --mix-output 1
+evoctl mixer output3_4 --volume 0 --mix-output 1
 ```
 
-Expected: mix is present on OUT 3|4
+Expected: mix is present on MIX 3|4.
 
+### Loopback source
+
+```bash
+evoctl mixer output5_6 --volume 0 --mix-output 0
+```
+
+Expected: USB playback CH5/CH6 is routed into MIX 1|2.
 
 ## Status
 
@@ -138,14 +150,13 @@ Expected: after load, volume back to -30 dB, gain back to 25 dB.
 ## Test Suite
 
 ```bash
-pytest tests/test_controller.py -v --device evo8
+python -m pytest tests/test_controller.py -v --hardware
 
 # Mixer DAW test (requires WirePlumber config + sounddevice + numpy)
-pip install sounddevice numpy
-pytest tests/test_mixer_audio.py -v --device evo8
+python -m pytest tests/test_mixer_audio.py -v --hardware --audio
 
 # Mixer mic test (manual - needs mic connected, records 3s voice samples)
-pytest tests/test_mixer_mic.py -vs --device evo8
+python -m pytest tests/test_mixer_mic.py -vs --hardware --audio --manual
 ```
 
 ## Uninstall

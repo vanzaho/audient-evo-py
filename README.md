@@ -65,10 +65,11 @@ sudo ./install.sh
 
 ### WirePlumber config (optional, recommended)
 
-Without explicit configuration, EVO devices expose extra USB audio channels (loopback bus) that PipeWire treats as surround. The `wireplumber/install.sh` script prompts for your device and sets up:
+Without explicit configuration, EVO devices expose extra USB audio channels that PipeWire treats as surround. The `wireplumber/install.sh` script prompts for your device and sets up:
 
-- Stereo-only output (disables upmix to loopback channels)
-- Explicit sinks/sources for loopback routing
+- Explicit main-output stereo sink (`evo4_main_output` or `evo8_main_output`)
+- Extra stereo sinks/sources for second output pairs and loopback routing
+- Upmix disabled on the raw ALSA sink, keeping non-main channels clean
 - Idle suspension disabled (prevents clicks on stream start)
 - Default sink/source at login
 
@@ -94,17 +95,19 @@ pipx uninstall audient-evo-py
 ## Usage
 
 ```bash
-evoctl set volume -20
-evoctl get volume
+evoctl set volume -20             # output volume in dB
+evoctl get volume                 # output volume in dB
 evoctl set gain 50 -t input1
 evoctl set mute 1 -t output
 evoctl set phantom 1 -t input1
 evoctl set monitor 50              # EVO 4 only - 0=input, 100=playback
 evoctl mixer input1 --volume -6 --pan 0
 evoctl mixer output1_2 --volume 0 --mix-output 0
-evoctl --device evo8 mixer output5_6 --volume 0 --mix-output 0
+evoctl --device evo8 mixer output3_4 --volume 0 --mix-output 1
+evoctl --device evo8 mixer output5_6 --volume 0 --mix-output 0  # loopback source
 evoctl status
-evoctl save / load
+evoctl save
+evoctl load
 evoctl --help
 evoctl --device evo4 --help
 evoctl --device evo8 --help
@@ -112,13 +115,17 @@ evoctl --device evo8 set volume -20  # when multiple devices connected
 evotui                             # TUI
 ```
 
-Use `-t` to target specific channels (e.g. `-t input3`, `-t output2`).
-See `evoctl --help` for all options.
+Use `--device evo4` or `--device evo8` when more than one EVO is connected.
+Use `-t` to target specific controls (for example `-t input3`, `-t output2`).
+Volume and gain values are dB. Direct monitor is percent-like, from 0=input to
+100=playback. See `evoctl --help` for all options.
 
 Mixer settings are write-only and auto-saved to `~/.config/audient-evo-py/`.
-Mixer `inputN` and `outputN_M` commands select a USB output source; `--mix-output`
-selects the mixer destination bus. Device controls can be saved/loaded via
-`evoctl save/load` or TUI.
+Mixer `inputN` commands route hardware inputs. Mixer `output1_2`, `output3_4`,
+and `output5_6` commands route stereo USB output sources. `--mix-output` selects
+the mixer destination bus: EVO 4 has `0=MIX 3|4`; EVO 8 has `0=MIX 1|2` and
+`1=MIX 3|4`. Device controls can be saved/loaded via `evoctl save`, `evoctl load`,
+or TUI.
 
 ## Design
 

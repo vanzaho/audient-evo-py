@@ -23,105 +23,83 @@ MIN_MIXER_SECTION_IW = 17
 MIN_MIXER_PAN_HALF = 7
 COL_GAP = 1
 
-# Box drawing - active (heavy) / inactive (light)
 BOX_TL_A, BOX_H_A, BOX_TR_A = "\u250f", "\u2501", "\u2513"  # ┏ ━ ┓
 BOX_V_A, BOX_BL_A, BOX_BR_A = "\u2503", "\u2517", "\u251b"  # ┃ ┗ ┛
-BOX_ML_A, BOX_MR_A = "\u2523", "\u252b"  # ┣ ┫
 BOX_TL, BOX_H, BOX_TR = "\u250c", "\u2500", "\u2510"  # ┌ ─ ┐
 BOX_V, BOX_BL, BOX_BR = "\u2502", "\u2514", "\u2518"  # │ └ ┘
-BOX_ML, BOX_MR = "\u251c", "\u2524"  # ├ ┤
 
-# Bus junctions and double-line box drawing
-J_CROSS, J_T_UP, J_T_DOWN = "\u253c", "\u2534", "\u252c"  # ┼ ┴ ┬
-BUS_TL, BUS_TR, BUS_BL, BUS_BR = "\u2554", "\u2557", "\u255a", "\u255d"
-BUS_H, BUS_V = "\u2550", "\u2551"
+BUS_TR, BUS_BL = "\u2557", "\u255a"
+BUS_H = "\u2550"
 BUS_J_START, BUS_J_T_UP = "\u2558", "\u2567"  # ╘ ╧
 BUS_J_T_DOWN, BUS_J_CROSS = "\u2566", "\u2566"  # ╦ ╦
 
-# Slider / indicator glyphs
 SL_FULL, ARROW_R, ARROW_R_EMPTY, ARROW_L = "\u25ac", "\u25b6", "\u25b7", "\u2190"  # ▬ ▶ ▷ ←
 ARROW_D, ARROW_U = "\u2193", "\u2191"  # ↓ ↑
 ARROWS = "\u2190\u2193\u2191\u2192"  # ←↓↑→
-PM, CHEVRON = "\u00b1", "\u276f"  # ± ❯
+PM = "\u00b1"  # ±
 TAB_SYM = "Tab"
 HSEP = " \u00b7 "  # help separator: ·
 
 
+def _clamp(val, lo, hi):
+    return max(lo, min(hi, val))
+
+
 def _build_elements(spec: DeviceSpec):
-    """Build focusable elements list from device spec."""
-    elements: list[tuple[str, str | None, str, int]] = [("output", "volume", "OUT", C_GREEN)]
-    for i in range(spec.num_inputs):
-        elements.append((f"input{i + 1}", "gain", f"IN {i + 1}", C_BLUE))
+    elements = [("output", "volume", "OUT", C_GREEN)]
+    elements += [(f"input{i + 1}", "gain", f"IN {i + 1}", C_BLUE) for i in range(spec.num_inputs)]
     if spec.has_monitor:
         elements.append(("monitor", None, "MONITOR", C_CYAN))
     return elements
 
 
 def _build_element_groups(spec: DeviceSpec):
-    """Build grouped element lists for subsection navigation.
-    Returns list of (group_name, elements_list) tuples.
-    EVO 4: single group with all elements (no subsection nav).
-    EVO 8: two groups - Inputs and Outputs.
-    """
     if spec.num_output_pairs == 1:
         return [("ALL", _build_elements(spec))]
-    inputs = []
-    for i in range(spec.num_inputs):
-        inputs.append((f"input{i + 1}", "gain", f"IN {i + 1}", C_BLUE))
-    outputs = []
-    for i in range(spec.num_output_pairs):
-        outputs.append((f"output{i + 1}", "volume", f"OUT {i * 2 + 1}|{i * 2 + 2}", C_GREEN))
+    inputs = [(f"input{i + 1}", "gain", f"IN {i + 1}", C_BLUE) for i in range(spec.num_inputs)]
+    outputs = [
+        (f"output{i + 1}", "volume", f"OUT {i * 2 + 1}|{i * 2 + 2}", C_GREEN)
+        for i in range(spec.num_output_pairs)
+    ]
     return [("INPUTS", inputs), ("OUTPUTS", outputs)]
 
 
 def _build_ranges(spec: DeviceSpec):
-    """Build value ranges dict from device spec."""
-    if spec.num_output_pairs == 1:
-        ranges = {"output": (spec.vol_db_min, spec.vol_db_max, 1.0)}
-    else:
-        ranges = {}
-        for i in range(spec.num_output_pairs):
-            ranges[f"output{i + 1}"] = (spec.vol_db_min, spec.vol_db_max, 1.0)
-    for i in range(spec.num_inputs):
-        ranges[f"input{i + 1}"] = (spec.gain_db_min, spec.gain_db_max, 1.0)
+    output_keys = (
+        ["output"]
+        if spec.num_output_pairs == 1
+        else [f"output{i + 1}" for i in range(spec.num_output_pairs)]
+    )
+    ranges = {key: (spec.vol_db_min, spec.vol_db_max, 1.0) for key in output_keys}
+    ranges.update(
+        {f"input{i + 1}": (spec.gain_db_min, spec.gain_db_max, 1.0) for i in range(spec.num_inputs)}
+    )
     if spec.has_monitor:
         ranges["monitor"] = (0, 100, 1)
     return ranges
 
 
 def _build_mixer_sections(spec: DeviceSpec):
-    """Build mixer sections as list of rows.
-    EVO 4: single row with all sections.
-    EVO 8: row 1 = inputs, row 2 = USB output source pairs.
-    Each row is a list of (key, label, color, sliders) tuples.
-    """
+    input_sliders = [
+        ("pan", "Pan", PAN_MIN, PAN_MAX, PAN_STEP),
+        ("volume", "Vol", _MIXER_DB_MIN, _MIXER_DB_MAX, 1.0),
+    ]
     output_sliders = [
         ("pan_l", "Pan L", PAN_MIN, PAN_MAX, PAN_STEP),
         ("pan_r", "Pan R", PAN_MIN, PAN_MAX, PAN_STEP),
         ("volume", "Vol", _MIXER_DB_MIN, _MIXER_DB_MAX, 1.0),
     ]
 
-    inputs = []
-    for i in range(spec.num_inputs):
-        inputs.append(
-            (
-                f"input{i + 1}",
-                f"IN {i + 1}",
-                C_BLUE,
-                [
-                    ("pan", "Pan", PAN_MIN, PAN_MAX, PAN_STEP),
-                    ("volume", "Vol", _MIXER_DB_MIN, _MIXER_DB_MAX, 1.0),
-                ],
-            )
-        )
+    inputs = [
+        (f"input{i + 1}", f"IN {i + 1}", C_BLUE, list(input_sliders))
+        for i in range(spec.num_inputs)
+    ]
 
     outputs_row = []
     for i in range(cfg.num_mixer_output_sources(spec)):
         label = f"OUT {cfg.stereo_pair_label(i)}"
-        color = C_GREEN
-        if i >= spec.num_output_pairs:
-            label += " (LOOP)"
-            color = C_YELLOW
+        color = C_YELLOW if i >= spec.num_output_pairs else C_GREEN
+        label += " (LOOP)" if color == C_YELLOW else ""
         outputs_row.append((cfg.output_key(i), label, color, list(output_sliders)))
     return [inputs, outputs_row]
 
@@ -141,20 +119,15 @@ class EvoTUI:
         self._file_cursor = 0
         self._file_scroll = 0
         self._file_input = ""
-        self._slider_map = []
         self._box_attr = 0
         self._text_cursor_pos = None  # (row, col) for terminal cursor, or None
 
-        # Build dynamic layout from spec
         self._element_groups = _build_element_groups(self.spec)
         self._ranges = _build_ranges(self.spec)
         self._mixer_rows = _build_mixer_sections(self.spec)
         self._has_subsections = len(self._element_groups) > 1
-
-        # Controls subsection state (EVO 8)
         self._controls_subsection = 0
 
-        # Mixer state
         self._mix_output = 0
         self._all_mixer_sections = [sec for row in self._mixer_rows for sec in row]
         self._mixer_section = 0
@@ -166,7 +139,6 @@ class EvoTUI:
         )
         self._mixer_section_h = self._max_pan * 2 + 5
 
-        # Per-device mixer section width
         # EVO 4: 2 sections must equal 3 EVO 8 sections (incl. gaps)
         # 3*(17+3)-1=59 => 2*(iw+3)-1=59 => iw=27; pan_half=(27-17)/2+7=12
         if self.spec.num_output_pairs == 1:
@@ -176,7 +148,6 @@ class EvoTUI:
             self._mixer_section_iw = MIN_MIXER_SECTION_IW
             self._mixer_pan_half = MIN_MIXER_PAN_HALF
 
-        # Compute controls body height
         if self._has_subsections:
             left_n = len(self._element_groups[0][1])
             right_n = len(self._element_groups[1][1])
@@ -193,17 +164,14 @@ class EvoTUI:
     # -- state --
 
     def _active_elements(self):
-        """Return elements list for the active controls subsection."""
         if self._has_subsections:
             return self._element_groups[self._controls_subsection][1]
         return self._element_groups[0][1]
 
     def _flat_mixer_sections(self):
-        """Return cached flat list of all mixer sections across rows."""
         return self._all_mixer_sections
 
     def _mixer_row_col(self):
-        """Return (row_idx, col_idx) of the current mixer section."""
         idx = self._mixer_section
         for r, row in enumerate(self._mixer_rows):
             if idx < len(row):
@@ -212,13 +180,11 @@ class EvoTUI:
         return 0, 0
 
     def _mixer_section_at(self, row_idx, col_idx):
-        """Return flat section index for given row/col (col clamped to row length)."""
         offset = sum(len(self._mixer_rows[r]) for r in range(row_idx))
-        col_idx = max(0, min(len(self._mixer_rows[row_idx]) - 1, col_idx))
+        col_idx = _clamp(col_idx, 0, len(self._mixer_rows[row_idx]) - 1)
         return offset + col_idx
 
     def _cur_mixer_state(self):
-        """Return flat mixer state dict for the active mixer output."""
         return cfg.flat_mixer_output_state(self._mixer_state, self.spec, self._mix_output)
 
     def _sync(self):
@@ -241,7 +207,7 @@ class EvoTUI:
         elems = self._active_elements()
         key = elems[idx][0]
         lo, hi, _ = self._ranges[key]
-        return max(0.0, min(1.0, (self._val(idx) - lo) / (hi - lo)))
+        return _clamp((self._val(idx) - lo) / (hi - lo), 0.0, 1.0)
 
     def _muted(self, idx):
         elems = self._active_elements()
@@ -255,11 +221,10 @@ class EvoTUI:
         return self._active_elements()[idx][0].startswith("input")
 
     def _build_controls_help(self):
-        """Return (nav_hints, set_hints) as lists of (key, desc[, color]) tuples."""
-        if self._has_subsections:
-            nav_hints = [("hjkl", f" {ARROWS}"), (TAB_SYM, " tab")]
-        else:
-            nav_hints = [("jk", f" {ARROW_D}{ARROW_U}"), (TAB_SYM, " tab")]
+        nav_hints = [
+            ("hjkl", f" {ARROWS}") if self._has_subsections else ("jk", f" {ARROW_D}{ARROW_U}"),
+            (TAB_SYM, " tab"),
+        ]
         set_hints = [("[]", f" {PM}1"), ("{}", f" {PM}5"), ("0-9", " dial")]
         if self._has_mute(self.cursor):
             set_hints.append(("m", " mute"))
@@ -268,7 +233,6 @@ class EvoTUI:
         return nav_hints, set_hints
 
     def _build_mixer_help(self):
-        """Return (nav_hints, set_hints) as lists of (key, desc[, color]) tuples."""
         sections = self._flat_mixer_sections()
         param = sections[self._mixer_section][3][self._mixer_param][0]
         step = "1" if param == "volume" else "5"
@@ -288,26 +252,9 @@ class EvoTUI:
         return nav_hints, set_hints
 
     def _draw_help_footer(self, scr, row, cx, nav_hints, set_hints):
-        """Draw help footer (two lines) with keys highlighted. Returns next row."""
         dim = curses.color_pair(C_WHITE) | curses.A_DIM
-        key_attr = curses.color_pair(C_WHITE) | curses.A_BOLD
-
-        def draw_hints(r, hints):
-            col = cx + 1
-            for i, hint in enumerate(hints):
-                key, desc = hint[0], hint[1]
-                color = hint[2] if len(hint) > 2 else C_WHITE
-                if i:
-                    self._safe(scr, r, col, HSEP, dim)
-                    col += len(HSEP)
-                key_style = curses.color_pair(color) | curses.A_BOLD
-                self._safe(scr, r, col, key, key_style)
-                col += len(key)
-                self._safe(scr, r, col, desc, dim)
-                col += len(desc)
-
-        draw_hints(row, nav_hints)
-        draw_hints(row + 1, set_hints)
+        self._draw_hints(scr, row, cx + 1, nav_hints, dim)
+        self._draw_hints(scr, row + 1, cx + 1, set_hints, dim)
         return row + 2
 
     def _is_db(self, idx=None):
@@ -326,16 +273,14 @@ class EvoTUI:
         elems = self._active_elements()
         key, sub = elems[self.cursor][:2]
         lo, hi, _ = self._ranges[key]
-        val = max(lo, min(hi, val))
+        val = _clamp(val, lo, hi)
         try:
             if key == "monitor":
                 self.evo.set_monitor(round(val))
             elif key == "output":
                 self.evo.set_volume(val)
             elif key.startswith("output"):
-                # EVO 8: output1, output2
-                pair = int(key[-1]) - 1
-                self.evo.set_volume(val, output_pair=pair)
+                self.evo.set_volume(val, output_pair=int(key[-1]) - 1)
             else:
                 self.evo.set_gain(key, val)
             if sub is None:
@@ -377,13 +322,15 @@ class EvoTUI:
     # -- mixer state persistence --
 
     def _load_mixer_state(self):
-        """Load mixer state from disk into TUI state."""
-        data = cfg.load_mixer_state(self.spec.name)
+        try:
+            data = cfg.load_mixer_state(self.spec.name)
+        except ValueError as e:
+            self._set_status(f"Mixer state error: {e}", err=True)
+            return
         if data is not None:
             self._mixer_state = data
 
     def _save_mixer_state(self):
-        """Persist TUI mixer state to disk."""
         cfg.save_mixer_state(self.spec.name, self._mixer_state)
 
     # -- mixer actions --
@@ -398,7 +345,7 @@ class EvoTUI:
         sections = self._flat_mixer_sections()
         key, _, _, sliders = sections[self._mixer_section]
         param, _, lo, hi, _ = sliders[self._mixer_param]
-        self._cur_mixer_state()[key][param] = max(lo, min(hi, val))
+        self._cur_mixer_state()[key][param] = _clamp(val, lo, hi)
         self._apply_mixer(key)
 
     def _mixer_adjust(self, delta):
@@ -458,20 +405,29 @@ class EvoTUI:
         elif self._file_cursor >= self._file_scroll + PICKER_LIST_H:
             self._file_scroll = self._file_cursor - PICKER_LIST_H + 1
 
+    def _picker_select(self, key):
+        moves = {
+            curses.KEY_UP: (-1, False),
+            curses.KEY_DOWN: (1, False),
+            curses.KEY_BTAB: (-1, True),
+            9: (1, True),
+        }
+        if key not in moves:
+            return False
+        delta, wrap = moves[key]
+        self._picker_move(delta, wrap)
+        if self._mode == "save" and self._file_list:
+            self._file_input = self._file_list[self._file_cursor].stem
+        return True
+
     def _picker_key(self, key):
         if key == 27:
             self._mode = "normal"
             return
+        if self._picker_select(key):
+            return
         if self._mode == "load":
-            if key == curses.KEY_UP:
-                self._picker_move(-1)
-            elif key == curses.KEY_DOWN:
-                self._picker_move(1)
-            elif key == curses.KEY_BTAB:
-                self._picker_move(-1, wrap=True)
-            elif key == 9:
-                self._picker_move(1, wrap=True)
-            elif key == 10 and self._file_list:
+            if key == 10 and self._file_list:
                 path = self._file_list[self._file_cursor]
                 try:
                     cfg.load_and_apply(self.evo, path)
@@ -482,23 +438,7 @@ class EvoTUI:
                     self._set_status(f"Load error: {e}", err=True)
                 self._mode = "normal"
         else:  # save
-            if key == curses.KEY_UP:
-                self._picker_move(-1)
-                if self._file_list:
-                    self._file_input = self._file_list[self._file_cursor].stem
-            elif key == curses.KEY_DOWN:
-                self._picker_move(1)
-                if self._file_list:
-                    self._file_input = self._file_list[self._file_cursor].stem
-            elif key == curses.KEY_BTAB:
-                self._picker_move(-1, wrap=True)
-                if self._file_list:
-                    self._file_input = self._file_list[self._file_cursor].stem
-            elif key == 9:
-                self._picker_move(1, wrap=True)
-                if self._file_list:
-                    self._file_input = self._file_list[self._file_cursor].stem
-            elif key in (curses.KEY_BACKSPACE, 127):
+            if key in (curses.KEY_BACKSPACE, 127):
                 self._file_input = self._file_input[:-1]
             elif 32 <= key <= 126:
                 max_len = BOX_IW - len("File: ") - len(".json") - 1
@@ -525,6 +465,19 @@ class EvoTUI:
         except curses.error:
             pass
 
+    def _draw_hints(self, scr, row, col, hints, dim):
+        for i, hint in enumerate(hints):
+            key, desc = hint[0], hint[1]
+            color = hint[2] if len(hint) > 2 else C_WHITE
+            if i:
+                self._safe(scr, row, col, HSEP, dim)
+                col += len(HSEP)
+            self._safe(scr, row, col, key, curses.color_pair(color) | curses.A_BOLD)
+            col += len(key)
+            self._safe(scr, row, col, desc, dim)
+            col += len(desc)
+        return col
+
     def _box_top(self, scr, row, cx, label, active=False, iw=BOX_IW, attr=None):
         self._box_attr = (
             attr
@@ -539,24 +492,6 @@ class EvoTUI:
         self._safe(scr, row, cx + 2, label, self._box_attr)
         self._safe(scr, row, cx + 2 + len(label), " " + d * dashes + e, self._box_attr)
 
-    def _box_top_centered(self, scr, row, cx, label, active=False, iw=None):
-        if iw is None:
-            iw = self._mixer_section_iw
-        self._box_attr = curses.A_BOLD if active else curses.color_pair(C_WHITE) | curses.A_DIM
-        self._box_active = active
-        h, d = (BOX_TL_A, BOX_H_A) if active else (BOX_TL, BOX_H)
-        e = BOX_TR_A if active else BOX_TR
-        label = label[: iw - 2]
-        inner = iw - len(label) - 2
-        left_d = inner // 2
-        self._safe(
-            scr,
-            row,
-            cx,
-            h + d * left_d + " " + label + " " + d * (inner - left_d) + e,
-            self._box_attr,
-        )
-
     def _box_side(self, scr, row, cx, iw=BOX_IW):
         v = BOX_V_A if self._box_active else BOX_V
         self._safe(scr, row, cx, v, self._box_attr)
@@ -568,16 +503,9 @@ class EvoTUI:
         br = BOX_BR_A if self._box_active else BOX_BR
         self._safe(scr, row, cx, bl + d * iw + br, self._box_attr)
 
-    def _box_bot_labeled(self, scr, row, cx, label, iw=BOX_IW):
-        bl = BOX_BL_A if self._box_active else BOX_BL
-        d = BOX_H_A if self._box_active else BOX_H
-        br = BOX_BR_A if self._box_active else BOX_BR
-        dashes = iw - len(label) - 3
-        self._safe(scr, row, cx, bl + d * dashes + " " + label + " " + d + br, self._box_attr)
-
     def _hslider(self, scr, row, x, frac, muted=False, sel=False, color=C_GREEN, w=SLIDER_W):
         slots = w * 2
-        filled_slots = max(0, min(slots, round(slots * frac)))
+        filled_slots = _clamp(round(slots * frac), 0, slots)
         full_chars = filled_slots // 2
         partial = filled_slots % 2
         fill_attr = curses.color_pair(C_RED if muted else color) | (
@@ -602,7 +530,7 @@ class EvoTUI:
         empty_attr = curses.color_pair(C_WHITE) | (curses.A_NORMAL if sel else curses.A_DIM)
         self._safe(scr, row, x, BOX_H * w, empty_attr)
 
-        left_slots = max(0, min(half * 2, round((1.0 - frac) * half * 2)))
+        left_slots = _clamp(round((1.0 - frac) * half * 2), 0, half * 2)
         right_slots = half * 2 - left_slots
         left_full, left_partial = divmod(left_slots, 2)
         right_full, right_partial = divmod(right_slots, 2)
@@ -635,33 +563,23 @@ class EvoTUI:
         ctrl_label = " CONTROLS "
         mix_label = " MIXER "
         dim = curses.color_pair(C_WHITE) | curses.A_DIM
+        rev = curses.A_REVERSE | curses.A_BOLD
 
-        # Tabs left-aligned
-        if self._window == "controls":
-            ctrl_attr = curses.A_REVERSE | curses.A_BOLD
-            mix_attr = dim
-        else:
-            ctrl_attr = dim
-            mix_attr = curses.A_REVERSE | curses.A_BOLD
+        controls = self._window == "controls"
+        ctrl_attr, mix_attr = (rev, dim) if controls else (dim, rev)
         self._safe(scr, row, cx + 1, ctrl_label, ctrl_attr)
         mix_x = cx + 1 + len(ctrl_label) + 1
         self._safe(scr, row, mix_x, mix_label, mix_attr)
 
-        # Device name right-aligned and dimmed
         dev_name = self.spec.display_name
         name_x = cx + section_w - len(dev_name)
         self._safe(scr, row, name_x, dev_name, dim)
 
-        # Underline rule across section width
         self._safe(scr, row + 1, cx, BOX_H * section_w, dim)
 
         # Erase under active tab (gives it a "connected" look)
-        if self._window == "controls":
-            active_x = cx + 1
-            active_label_w = len(ctrl_label)
-        else:
-            active_x = mix_x
-            active_label_w = len(mix_label)
+        active_x = cx + 1 if controls else mix_x
+        active_label_w = len(ctrl_label if controls else mix_label)
         self._safe(scr, row + 1, active_x, " " * active_label_w, dim)
 
     # -- section drawing (controls) --
@@ -681,7 +599,6 @@ class EvoTUI:
             self._pan_slider(scr, row, cx + SLIDER_OFF, frac, active, color, w=sw)
         else:
             self._hslider(scr, row, cx + SLIDER_OFF, frac, muted, active, color, w=sw)
-        self._slider_map.append((row, cx + SLIDER_OFF, sw, idx))
         row += 1
 
         self._box_side(scr, row, cx, iw=bw)
@@ -863,16 +780,7 @@ class EvoTUI:
         bot_dashes = BOX_IW - hints_w
         self._safe(scr, row, cx, BOX_BL + BOX_H * bot_dashes, dim)
         col = cx + 1 + bot_dashes + 1  # BL + dashes + leading space
-        for i, hint in enumerate(hints):
-            key, desc = hint[0], hint[1]
-            color = hint[2] if len(hint) > 2 else C_WHITE
-            if i:
-                self._safe(scr, row, col, HSEP, dim)
-                col += len(HSEP)
-            self._safe(scr, row, col, key, curses.color_pair(color) | curses.A_BOLD)
-            col += len(key)
-            self._safe(scr, row, col, desc, dim)
-            col += len(desc)
+        col = self._draw_hints(scr, row, col, hints, dim)
         self._safe(scr, row, col, " " + BOX_H, dim)
         self._safe(scr, row, cx + BOX_IW + 1, BOX_BR, dim)
 
@@ -886,7 +794,6 @@ class EvoTUI:
 
         scr.erase()
         h, w = scr.getmaxyx()
-        self._slider_map = []
 
         # Compute layout width - controls always matches mixer so both tabs are equal width
         max_row_len = max(len(row) for row in self._mixer_rows)
@@ -927,52 +834,33 @@ class EvoTUI:
         return row + 1
 
     def _draw_controls_twocol(self, scr, row, cx, mixer_w):
-        """Draw two-column controls layout for EVO 8 (inputs left, outputs right)."""
         col_w = (mixer_w - COL_GAP) // 2
         col_bw = col_w - 2
         col_sw = col_bw - SLIDER_OFF
-        right_cx = cx + col_w + COL_GAP
-
-        left_elems = self._element_groups[0][1]
-        right_elems = self._element_groups[1][1]
-
-        # Draw left column (inputs)
         saved_sub = self._controls_subsection
-        self._controls_subsection = 0
-        left_row = row
-        for idx in range(len(left_elems)):
-            left_row = self._draw_section(
-                scr,
-                left_row,
-                cx,
-                idx,
-                sw=col_sw,
-                bw=col_bw,
-                force_inactive=(saved_sub != 0),
-            )
-            if idx < len(left_elems) - 1:
-                left_row += 1
 
-        # Draw right column (outputs)
-        self._controls_subsection = 1
-        right_row = row
-        for idx in range(len(right_elems)):
-            right_row = self._draw_section(
-                scr,
-                right_row,
-                right_cx,
-                idx,
-                sw=col_sw,
-                bw=col_bw,
-                force_inactive=(saved_sub != 1),
-            )
-            if idx < len(right_elems) - 1:
-                right_row += 1
+        def draw_col(subsection, col_x):
+            self._controls_subsection = subsection
+            col_row = row
+            elems = self._element_groups[subsection][1]
+            for idx in range(len(elems)):
+                col_row = self._draw_section(
+                    scr,
+                    col_row,
+                    col_x,
+                    idx,
+                    sw=col_sw,
+                    bw=col_bw,
+                    force_inactive=saved_sub != subsection,
+                )
+                if idx < len(elems) - 1:
+                    col_row += 1
+            return col_row
 
+        left_row = draw_col(0, cx)
+        right_row = draw_col(1, cx + col_w + COL_GAP)
         self._controls_subsection = saved_sub
-        row = max(left_row, right_row)
-
-        return row + 1
+        return max(left_row, right_row) + 1
 
     def _draw_bus_route(self, scr, row, cx, width):
         """Draw 3-line route between input/source rows and mixer outputs.
@@ -1115,17 +1003,7 @@ class EvoTUI:
         self._safe(scr, row, cx, BOX_H * dashes, dim)
         self._safe(scr, row, cx + section_w - 1, BOX_H, dim)
         # Draw hints right-aligned, keys highlighted
-        col = cx + dashes + 1  # +1 for leading space
-        for i, hint in enumerate(hints):
-            key, desc = hint[0], hint[1]
-            color = hint[2] if len(hint) > 2 else C_WHITE
-            if i:
-                self._safe(scr, row, col, HSEP, dim)
-                col += len(HSEP)
-            self._safe(scr, row, col, key, curses.color_pair(color) | curses.A_BOLD)
-            col += len(key)
-            self._safe(scr, row, col, desc, dim)
-            col += len(desc)
+        self._draw_hints(scr, row, cx + dashes + 1, hints, dim)
         return row + 1
 
     # -- key handlers --
@@ -1281,19 +1159,18 @@ class DemoController:
 
     def __init__(self, spec: DeviceSpec):
         self.spec = spec
-        self._state = {}
-        # Init default state
-        if spec.num_output_pairs == 1:
-            self._state["output"] = {"volume": -10.0, "mute": False}
-        else:
-            for i in range(spec.num_output_pairs):
-                self._state[f"output{i + 1}"] = {"volume": -10.0, "mute": False}
-        for i in range(spec.num_inputs):
-            self._state[f"input{i + 1}"] = {
-                "gain": 20.0,
-                "mute": False,
-                "phantom": False,
+        output_keys = (
+            ["output"]
+            if spec.num_output_pairs == 1
+            else [f"output{i + 1}" for i in range(spec.num_output_pairs)]
+        )
+        self._state = {key: {"volume": -10.0, "mute": False} for key in output_keys}
+        self._state.update(
+            {
+                f"input{i + 1}": {"gain": 20.0, "mute": False, "phantom": False}
+                for i in range(spec.num_inputs)
             }
+        )
         if spec.has_monitor:
             self._state["monitor"] = 50
 
@@ -1312,7 +1189,7 @@ class DemoController:
         return copy.deepcopy(self._state)
 
     def set_volume(self, db: float, output_pair: int | None = None):
-        db = max(self.spec.vol_db_min, min(self.spec.vol_db_max, db))
+        db = _clamp(db, self.spec.vol_db_min, self.spec.vol_db_max)
         if self.spec.num_output_pairs == 1:
             self._state["output"]["volume"] = db
         elif output_pair is not None:
@@ -1323,11 +1200,11 @@ class DemoController:
         return (0, db)
 
     def set_gain(self, target: str, db: float):
-        db = max(self.spec.gain_db_min, min(self.spec.gain_db_max, db))
+        db = _clamp(db, self.spec.gain_db_min, self.spec.gain_db_max)
         self._state[target]["gain"] = db
 
     def set_monitor(self, val: int):
-        self._state["monitor"] = max(0, min(100, val))
+        self._state["monitor"] = _clamp(val, 0, 100)
 
     def set_mute(self, target: str, on: bool):
         self._state[target]["mute"] = on

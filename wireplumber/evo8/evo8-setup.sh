@@ -8,8 +8,8 @@
 
 set -euo pipefail
 
-# Main output is the raw ALSA sink (with upmix disabled via 51-evo8.conf)
-SINK="alsa_output.usb-Audient_EVO8-00.analog-surround-51"
+# Main output is the explicit stereo sink from evo8-stereo.conf.
+SINK="evo8_main_output"
 SOURCE="evo8_mic_1_2"
 
 # Wait for PipeWire graph to settle

@@ -290,6 +290,7 @@ EVO8 = DeviceSpec(
     mixer_inputs=10,
     mixer_outputs=4,
     num_mute_targets=6,
+    has_monitor=False,
 )
 ```
 
