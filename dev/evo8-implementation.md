@@ -178,16 +178,16 @@ The EVO 8 loopback mixer has **10 inputs × 4 outputs = 40 cross-points**.
 
 ### Mixer outputs
 
-The EVO 8 mixer has **two independent stereo mix buses**, one per output pair.
-Each bus can be mixed independently (e.g. mic 1+2 at full level to bus 0, silent
-to bus 1).
+The EVO 8 mixer has **two independent stereo mixer outputs**, one per output pair.
+Each mixer output can be mixed independently (e.g. mic 1+2 at full level to
+output 0, silent to output 1).
 
-| out_idx | Mix bus | Destination |
+| out_idx | Mixer output | Destination |
 |---------|---------|-------------|
-| 0 | Bus 0 L | OUT1+2 context (loopback / monitoring) |
-| 1 | Bus 0 R | OUT1+2 context |
-| 2 | Bus 1 L | OUT3+4 context |
-| 3 | Bus 1 R | OUT3+4 context |
+| 0 | Output 0 L | OUT1+2 context (loopback / monitoring) |
+| 1 | Output 0 R | OUT1+2 context |
+| 2 | Output 1 L | OUT3+4 context |
+| 3 | Output 1 R | OUT3+4 context |
 
 Cross-referenced from Arduino reference: `output_num=0` ("Main 1+2") maps to
 out_idx 0,1 and `output_num=1` ("Main 3+4") maps to out_idx 2,3.
@@ -216,22 +216,18 @@ With `num_outputs = 4`:
 
 ### Controller methods
 
-All three methods accept a `mix_bus` parameter (0-based, default 0). For EVO 4
-(one output pair) only `mix_bus=0` is valid. For EVO 8, `mix_bus=0` targets
-OUT1+2 and `mix_bus=1` targets OUT3+4.
+The high-level mixer methods accept a `mix_output` parameter (0-based, default 0). For EVO 4
+(one output pair) only `mix_output=0` is valid. For EVO 8, `mix_output=0` targets
+OUT1+2 and `mix_output=1` targets OUT3+4.
 
-`set_mixer_input(input_num, gain_db, pan, mix_bus=0)` - routes one mic/line input
-(1-4) to a mix bus. CN base = `(input_num-1) * 4 + mix_bus * 2`; writes L and R.
+`set_mixer_input(input_num, gain_db, pan, mix_output=0)` - routes one mic/line input
+(1-4) to a mixer output. CN base = `(input_num-1) * 4 + mix_output * 2`; writes L and R.
 
-`set_mixer_output(volume_db, pan_l, pan_r, output_pair=0, mix_bus=0)` - routes a
-DAW playback pair to a mix bus. `output_pair` selects which DAW channels to read
-from (0=main in_idx 4+5, 1=out3+4 in_idx 6+7). Writes four cross-points (DAW_L and
-DAW_R each to bus L and bus R).
-
-`set_mixer_loopback(volume_db, pan_l, pan_r, mix_bus=0)` - routes the loopback
-output signal (in_idx 8+9) to a mix bus. Stride between loopback L and R in CN
-space equals `mixer_outputs` (4 on EVO 8), so loopback_R starts at
-`_loop_base_cn + mixer_outputs`.
+`set_mixer_output(volume_db, pan_l, pan_r, output_pair=0, mix_output=0)` - routes a
+stereo USB output source pair to a mixer output. `output_pair` selects which output
+source pair to read from: 0=OUT1+2 (in_idx 4+5), 1=OUT3+4 (in_idx 6+7), and
+2=OUT5+6 (in_idx 8+9, labeled loopback by the device). Writes four cross-points
+(source L and source R each to destination L and destination R).
 
 ---
 

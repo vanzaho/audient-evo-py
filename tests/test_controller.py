@@ -437,9 +437,10 @@ class TestMixer:
         """Set output to 0 dB with default pans - should not error."""
         evo.set_mixer_output(0.0)
 
-    def test_set_mixer_loopback(self, evo):
-        """Set loopback to -6 dB with default pans - should not error."""
-        evo.set_mixer_loopback(-6.0)
+    def test_set_mixer_final_output_source(self, evo):
+        """Set the final USB output source pair to -6 dB - should not error."""
+        output_pair = (evo.spec.mixer_inputs - evo.spec.num_inputs) // 2 - 1
+        evo.set_mixer_output(-6.0, output_pair=output_pair)
 
     def test_crosspoint_invalid_cn(self, evo):
         with pytest.raises(ValueError):
@@ -451,10 +452,11 @@ class TestMixer:
         with pytest.raises(ValueError):
             evo.set_mixer_input(evo.spec.num_inputs + 1, 0.0)
 
-    def test_mix_bus(self, evo, device_spec):
-        """Test mixer operations on second mix bus (multi-output devices)."""
+    def test_mix_output(self, evo, device_spec):
+        """Test mixer operations on second mixer output (multi-output devices)."""
         if device_spec.num_output_pairs < 2:
             pytest.skip("Single output pair device")
-        evo.set_mixer_input(1, 0.0, 0.0, mix_bus=1)
-        evo.set_mixer_output(0.0, mix_bus=1)
-        evo.set_mixer_loopback(-6.0, mix_bus=1)
+        evo.set_mixer_input(1, 0.0, 0.0, mix_output=1)
+        evo.set_mixer_output(0.0, mix_output=1)
+        output_pair = (device_spec.mixer_inputs - device_spec.num_inputs) // 2 - 1
+        evo.set_mixer_output(-6.0, output_pair=output_pair, mix_output=1)

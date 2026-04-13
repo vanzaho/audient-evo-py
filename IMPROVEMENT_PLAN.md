@@ -6,45 +6,30 @@ then tooling and documentation.
 
 VERY IMPORTANT!: The architecture, code and documentation needs to be as unambiguous, minimal and readable as it can be with respect to the implemented features.
 
+VERY IMPORTANT!: No backwards compatibility - make implementation as clean and minimal as possible. Breaking changes are encouraged if final solution is simpler.
+
 ## Phase 1 - Stabilize Shared Contracts
-
-### Task 2: Use shared mixer state in CLI and TUI
-
-Goal: remove duplicated persistence logic and prevent state loss between tools.
-
-Files:
-- `evo/config.py`
-- `evoctl.py`
-- `evotui.py`
-
-Implementation:
-- Move mixer get/update helpers into `evo.config`.
-- Replace remaining CLI direct canonical dict mutation with shared update helpers.
-- Replace remaining TUI `_load_mixer_state()` and `_save_mixer_state()` adapter logic
-  with shared helpers.
-
-Acceptance checks:
-- Set EVO 8 bus 1 values in CLI, open TUI, values appear on bus 1.
-- Save in TUI, load with CLI, all mixer values apply.
-- `evoctl save` includes mixer state that `evoctl load` can fully restore.
 
 ### Task 3: Add controller validation for mixer addressing
 
-Goal: prevent invalid `mix_bus` or `output_pair` values from writing valid but
-wrong crosspoints.
+Goal: prevent invalid mixer destination or USB output source values from writing
+valid but wrong crosspoints.
 
 Files:
 - `evo/controller.py`
 - `tests/test_controller.py`
 
 Implementation:
-- Validate `mix_bus` in `set_mixer_output()` and `set_mixer_loopback()`.
-- Validate `output_pair` in `set_mixer_output()`.
+- Validate `mix_output` in `set_mixer_input()` and `set_mixer_output()`.
+- Validate `output_pair` in `set_mixer_output()` against all mixer output sources
+  (`output1_2`, `output3_4`, and `output5_6` on EVO 8).
+- Do not add compatibility wrappers for removed route names.
 - Validate pan and volume consistently, or document and test clamping behavior.
-- Add unit tests for invalid `mix_bus`, invalid `output_pair`, and boundary values.
+- Add no-hardware unit tests for invalid `mix_output`, invalid `output_pair`, and
+  boundary values.
 
 Acceptance checks:
-- Invalid `mix_bus` raises `ValueError` for input, output, and loopback methods.
+- Invalid `mix_output` raises `ValueError` for input and output methods.
 - Invalid `output_pair` raises `ValueError`.
 - Existing valid mixer calls still compute the same crosspoints.
 
@@ -89,9 +74,9 @@ Acceptance checks:
 - Multi-transfer operations such as `status`, `save`, `load`, and `mixer output`
   reuse one open device fd.
 
-### Task 6: Expose all EVO 8 mixer routes in the CLI
+### Task 6: Finish CLI mixer route documentation and parser tests
 
-Goal: make the CLI capable of configuring the same mixer routes as the TUI.
+Goal: make the new explicit mixer route syntax documented and protected by tests.
 
 Files:
 - `evoctl.py`
@@ -99,17 +84,22 @@ Files:
 - tests, if CLI parsing tests are added
 
 Implementation:
-- Add EVO 8 output pair selection for mixer output routing.
-- Prefer explicit names such as `output1`, `output2`, and `loopback` over a
-  single ambiguous `output`.
-- Save state using the shared mixer state helpers from Phase 1.
+- Add CLI parser tests for the explicit stereo output source commands:
+  `output1_2`, `output3_4`, and `output5_6`.
+- Document `--mix-output` as the mixer destination selector.
+- Update README examples to use stereo-pair names instead of the removed
+  `mixer output` / `mixer loopback` commands.
 
 Acceptance checks:
-- `evoctl --device evo8 mixer output1 --volume 0 --mix-bus 0` routes DAW 1/2.
-- `evoctl --device evo8 mixer output2 --volume 0 --mix-bus 1` routes DAW 3/4.
-- Saved mixer state represents output pair identity explicitly.
+- `evoctl --device evo8 mixer output1_2 --volume 0 --mix-output 0` routes OUT 1|2.
+- `evoctl --device evo8 mixer output3_4 --volume 0 --mix-output 1` routes OUT 3|4.
+- `evoctl --device evo8 mixer output5_6 --volume 0 --mix-output 0` routes OUT 5|6.
+- Saved mixer state represents output source and mixer destination identity explicitly.
 
-IMPORTANT NOTE: to my understanding --mix-bus 0/1 is the output pair selector, maybe rename it to something more clear like --mix-out. Another issue is that in hardware, outputs are generally taken as stereo channels (1+2, 3+4 (loopback in evo4), 5+6 (loopback in evo8)), so the output1 and output2 are a bit misleading here. It would be good to figure out some explicit but user-friendly naming scheme for these or at least mention that outputs are stereo.
+IMPORTANT NOTE: The implementation now distinguishes USB output sources
+(`output1_2`, `output3_4`, `output5_6`) from mixer destinations (`--mix-output`).
+Do not reintroduce a standalone `loopback` mixer section; use the stereo output
+source label with explanatory text only where needed.
 
 ### Task 6.5: Remove diag command from evoctl and all docs
 
@@ -390,23 +380,22 @@ Acceptance checks:
 
 ## Suggested Implementation Order
 
-1. Task 2 - Use shared mixer state in CLI and TUI.
-2. Task 3 - Add controller validation for mixer addressing.
-3. Task 4 - Make global CLI help work without hardware.
-4. Task 5 - Use a shared fd for CLI operations.
-5. Task 6 and 6.5 - Expose all EVO 8 mixer routes in the CLI.
-6. Task 11 - Add reproducible dev/test dependencies.
-7. Task 12 - Mark and isolate hardware/audio/manual tests.
-8. Task 13 - Preserve user mixer state in audio tests.
-9. Task 9 - Pick one WirePlumber default sink strategy and apply it everywhere.
-10. Task 10 - Make WirePlumber node matching less brittle.
-11. Task 7 - Fix open-file lifetime on disconnect.
-12. Task 8 - Review zero-length and ioctl edge cases.
-13. Task 15 - Add atomic config writes and clearer config errors.
-14. Task 14 - Split the TUI into smaller modules.
-15. Task 16 - Refresh user-facing docs.
-16. Task 17 and 17.5 - Refresh architecture docs.
-17. Task 18 - Repair or archive dev probe scripts.
+1. Task 3 - Add controller validation for mixer addressing.
+2. Task 4 - Make global CLI help work without hardware.
+3. Task 5 - Use a shared fd for CLI operations.
+4. Task 6 and 6.5 - Finish CLI mixer route documentation/parser tests and remove diag.
+5. Task 11 - Add reproducible dev/test dependencies.
+6. Task 12 - Mark and isolate hardware/audio/manual tests.
+7. Task 13 - Preserve user mixer state in audio tests.
+8. Task 9 - Pick one WirePlumber default sink strategy and apply it everywhere.
+9. Task 10 - Make WirePlumber node matching less brittle.
+10. Task 7 - Fix open-file lifetime on disconnect.
+11. Task 8 - Review zero-length and ioctl edge cases.
+12. Task 15 - Add atomic config writes and clearer config errors.
+13. Task 14 - Split the TUI into smaller modules.
+14. Task 16 - Refresh user-facing docs.
+15. Task 17 - Refresh architecture docs.
+16. Task 18 - Repair or archive dev probe scripts.
 
 ## Notes
 

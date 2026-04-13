@@ -94,17 +94,17 @@ Expected: error - EVO 8 has no direct monitor control.
 
 ```bash
 evoctl mixer input1 --volume 0 --pan 0
-evoctl mixer output --volume 0
-evoctl mixer loopback --volume -128
+evoctl mixer output1_2 --volume 0
+evoctl mixer output5_6 --volume -128
 ```
 
 Expected: mix is present on OUT 1|2
 
-### Second mix bus (OUT 3/4)
+### Second mixer output (OUT 3/4)
 
 ```bash
-evoctl mixer input1 --volume 0 --pan 0 --mix-bus 1
-evoctl mixer output --volume 0 --mix-bus 1
+evoctl mixer input1 --volume 0 --pan 0 --mix-output 1
+evoctl mixer output1_2 --volume 0 --mix-output 1
 ```
 
 Expected: mix is present on OUT 3|4
@@ -157,4 +157,3 @@ pipx uninstall audient-evo-py
 ```
 
 Verify: `wpctl status | grep -i evo` shows nothing, `/dev/evo8` is gone.
-

@@ -16,8 +16,9 @@ import sys
 import time
 sys.path.insert(0, ".")
 
-from evo4 import kmod
-from evo4.controller import _db_to_usb, _MU60, _CS_MIXER, _MIXER_DB_MIN
+from evo import kmod
+from evo.controller import _db_to_usb, _MU60, _CS_MIXER, _MIXER_DB_MIN
+from evo.devices import EVO4
 
 MUTE = _db_to_usb(_MIXER_DB_MIN)   # -128 dB = silence
 UNITY = _db_to_usb(0.0)            # 0 dB
@@ -61,7 +62,7 @@ def main():
     print("  q      = quit")
     print()
 
-    with kmod.open_device() as fd:
+    with kmod.open_device(EVO4.dev_path) as fd:
         print("Muting all cross-points...")
         mute_all(fd)
         print("Done. Starting probe.\n")

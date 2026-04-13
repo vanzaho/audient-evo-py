@@ -49,7 +49,7 @@ HSEP = " \u00b7 "  # help separator: ·
 
 def _build_elements(spec: DeviceSpec):
     """Build focusable elements list from device spec."""
-    elements = [("output", "volume", "OUT", C_GREEN)]
+    elements: list[tuple[str, str | None, str, int]] = [("output", "volume", "OUT", C_GREEN)]
     for i in range(spec.num_inputs):
         elements.append((f"input{i + 1}", "gain", f"IN {i + 1}", C_BLUE))
     if spec.has_monitor:
@@ -92,7 +92,7 @@ def _build_ranges(spec: DeviceSpec):
 def _build_mixer_sections(spec: DeviceSpec):
     """Build mixer sections as list of rows.
     EVO 4: single row with all sections.
-    EVO 8: row 1 = inputs, row 2 = outputs + loopback.
+    EVO 8: row 1 = inputs, row 2 = USB output source pairs.
     Each row is a list of (key, label, color, sliders) tuples.
     """
     output_sliders = [
@@ -100,7 +100,6 @@ def _build_mixer_sections(spec: DeviceSpec):
         ("pan_r", "Pan R", PAN_MIN, PAN_MAX, PAN_STEP),
         ("volume", "Vol", _MIXER_DB_MIN, _MIXER_DB_MAX, 1.0),
     ]
-    loopback_sliders = list(output_sliders)
 
     inputs = []
     for i in range(spec.num_inputs):
@@ -116,50 +115,19 @@ def _build_mixer_sections(spec: DeviceSpec):
             )
         )
 
-    if spec.num_output_pairs == 1:
-        # EVO 4: two rows - inputs on top, outputs on bottom (same layout as EVO 8)
-        outputs_row = [
-            ("main", "OUT 1|2", C_GREEN, list(output_sliders)),
-            ("loopback", "OUT 3|4 (LOOP)", C_YELLOW, loopback_sliders),
-        ]
-        return [inputs, outputs_row]
-    else:
-        # EVO 8: two rows
-        outputs_row = []
-        for i in range(spec.num_output_pairs):
-            outputs_row.append(
-                (
-                    f"output_pair{i + 1}",
-                    f"OUT {i * 2 + 1}|{i * 2 + 2}",
-                    C_GREEN,
-                    list(output_sliders),
-                )
-            )
-        outputs_row.append(("loopback", "OUT 5|6 (LOOP)", C_YELLOW, loopback_sliders))
-        return [inputs, outputs_row]
-
-
-def _build_mixer_state_single(spec: DeviceSpec):
-    """Build initial mixer state for a single bus."""
-    state = {}
-    for i in range(spec.num_inputs):
-        state[f"input{i + 1}"] = {"volume": -128.0, "pan": 0.0}
-    if spec.num_output_pairs == 1:
-        state["main"] = {"volume": -128.0, "pan_l": -100.0, "pan_r": 100.0}
-    else:
-        for i in range(spec.num_output_pairs):
-            state[f"output_pair{i + 1}"] = {"volume": -128.0, "pan_l": -100.0, "pan_r": 100.0}
-    state["loopback"] = {"volume": -128.0, "pan_l": -100.0, "pan_r": 100.0}
-    return state
-
-
-def _build_mixer_state(spec: DeviceSpec):
-    """Build initial mixer state. Per-bus for multi-output devices."""
-    return [_build_mixer_state_single(spec) for _ in range(spec.num_output_pairs)]
+    outputs_row = []
+    for i in range(cfg.num_mixer_output_sources(spec)):
+        label = f"OUT {cfg.stereo_pair_label(i)}"
+        color = C_GREEN
+        if i >= spec.num_output_pairs:
+            label += " (LOOP)"
+            color = C_YELLOW
+        outputs_row.append((cfg.output_key(i), label, color, list(output_sliders)))
+    return [inputs, outputs_row]
 
 
 class EvoTUI:
-    def __init__(self, evo: EVOController):
+    def __init__(self, evo):
         self.evo = evo
         self.spec = evo.spec
         self.cursor = 0
@@ -187,11 +155,11 @@ class EvoTUI:
         self._controls_subsection = 0
 
         # Mixer state
-        self._mixer_bus = 0
+        self._mix_output = 0
         self._all_mixer_sections = [sec for row in self._mixer_rows for sec in row]
         self._mixer_section = 0
         self._mixer_param = len(self._all_mixer_sections[0][3]) - 1
-        self._mixer_state = _build_mixer_state(self.spec)
+        self._mixer_state = cfg.default_mixer_state(self.spec)
 
         self._max_pan = max(
             sum(1 for s in sec[3] if s[0].startswith("pan")) for sec in self._all_mixer_sections
@@ -250,8 +218,8 @@ class EvoTUI:
         return offset + col_idx
 
     def _cur_mixer_state(self):
-        """Return mixer state dict for the active bus."""
-        return self._mixer_state[self._mixer_bus]
+        """Return flat mixer state dict for the active mixer output."""
+        return cfg.flat_mixer_output_state(self._mixer_state, self.spec, self._mix_output)
 
     def _sync(self):
         try:
@@ -310,7 +278,11 @@ class EvoTUI:
             ("Space", " next"),
             (TAB_SYM, " tab"),
         ]
-        set_hints = [("[]", f" {PM}{step}"), ("{}", f" {PM}{big}"), ("0-9", " dial")]
+        set_hints: list[tuple[str, str] | tuple[str, str, int]] = [
+            ("[]", f" {PM}{step}"),
+            ("{}", f" {PM}{big}"),
+            ("0-9", " dial"),
+        ]
         if self.spec.num_output_pairs > 1:
             set_hints.append(("m", " mix", C_CYAN))
         return nav_hints, set_hints
@@ -407,46 +379,12 @@ class EvoTUI:
     def _load_mixer_state(self):
         """Load mixer state from disk into TUI state."""
         data = cfg.load_mixer_state(self.spec.name)
-        if data is None:
-            return
-        for b, bus_data in enumerate(data["buses"][: self.spec.num_output_pairs]):
-            bus = self._mixer_state[b]
-            for i in range(self.spec.num_inputs):
-                key = f"input{i + 1}"
-                if key in bus_data["inputs"]:
-                    bus[key].update(bus_data["inputs"][key])
-
-            outputs = bus_data["outputs"]
-            if self.spec.num_output_pairs == 1:
-                if "output_pair1" in outputs:
-                    bus["main"].update(outputs["output_pair1"])
-            else:
-                for pair in range(self.spec.num_output_pairs):
-                    key = f"output_pair{pair + 1}"
-                    if key in outputs:
-                        bus[key].update(outputs[key])
-
-            bus["loopback"].update(bus_data["loopback"])
+        if data is not None:
+            self._mixer_state = data
 
     def _save_mixer_state(self):
         """Persist TUI mixer state to disk."""
-        data = cfg.default_mixer_state(self.spec)
-        for b in range(self.spec.num_output_pairs):
-            bus = self._mixer_state[b]
-            state_bus = data["buses"][b]
-            for i in range(self.spec.num_inputs):
-                key = f"input{i + 1}"
-                state_bus["inputs"][key] = dict(bus[key])
-
-            if self.spec.num_output_pairs == 1:
-                state_bus["outputs"]["output_pair1"].update(bus["main"])
-            else:
-                for pair in range(self.spec.num_output_pairs):
-                    key = f"output_pair{pair + 1}"
-                    state_bus["outputs"][key].update(bus[key])
-
-            state_bus["loopback"].update(bus["loopback"])
-        cfg.save_mixer_state(self.spec.name, data)
+        cfg.save_mixer_state(self.spec.name, self._mixer_state)
 
     # -- mixer actions --
 
@@ -471,19 +409,15 @@ class EvoTUI:
     def _apply_mixer(self, key):
         try:
             s = self._cur_mixer_state()[key]
-            bus = self._mixer_bus
+            mix_output = self._mix_output
             if key.startswith("input"):
                 input_num = int(key[5:])
-                self.evo.set_mixer_input(input_num, s["volume"], s["pan"], mix_bus=bus)
-            elif key == "main":
-                self.evo.set_mixer_output(s["volume"], s["pan_l"], s["pan_r"], mix_bus=bus)
-            elif key.startswith("output_pair"):
-                pair = int(key[-1]) - 1
+                self.evo.set_mixer_input(input_num, s["volume"], s["pan"], mix_output=mix_output)
+            elif key.startswith("output"):
+                pair = cfg.output_pair_index(key)
                 self.evo.set_mixer_output(
-                    s["volume"], s["pan_l"], s["pan_r"], output_pair=pair, mix_bus=bus
+                    s["volume"], s["pan_l"], s["pan_r"], output_pair=pair, mix_output=mix_output
                 )
-            elif key == "loopback":
-                self.evo.set_mixer_loopback(s["volume"], s["pan_l"], s["pan_r"], mix_bus=bus)
             self._save_mixer_state()
         except OSError as e:
             self._set_status(f"Error: {e}", err=True)
@@ -1041,9 +975,9 @@ class EvoTUI:
         return row + 1
 
     def _draw_bus_route(self, scr, row, cx, width):
-        """Draw 3-line bus between input and output rows.
-        EVO 4: static single bus ending with '▶ LOOP IN 1|2' label.
-        EVO 8: interactive bus selector with two output pair labels.
+        """Draw 3-line route between input/source rows and mixer outputs.
+        EVO 4: static single mixer output ending at input 3|4.
+        EVO 8: interactive mixer output selector for 1|2 or 3|4.
         """
         sec_ow = self._mixer_section_iw + 3
         dim = curses.color_pair(C_WHITE) | curses.A_DIM
@@ -1060,15 +994,16 @@ class EvoTUI:
             if mstate.get(key, {}).get("volume", _MIXER_DB_MIN) > _MIXER_DB_MIN:
                 output_wall_positions.add(i * sec_ow + self._mixer_section_iw + 1)
 
-        # Compute label width to right-align bus switcher within the app
-        evo4_label = " IN 3|4 (LOOP) "
-        bus_labels_all = [
-            label for key, label, _, _ in self._mixer_rows[1] if key.startswith("output_pair")
+        # Compute label width to right-align the mixer output switcher.
+        evo4_label = f" MIX {cfg.mix_output_label(self.spec, 0)} "
+        mix_labels = [
+            f"MIX {cfg.mix_output_label(self.spec, i)}"
+            for i in range(self.spec.num_output_pairs)
         ]
         if self.spec.num_output_pairs == 1:
             label_w = len(evo4_label) + 1  # +1 reserves one connector char at right end
         else:
-            label_w = 3 + max(len(l) for l in bus_labels_all[:2]) if bus_labels_all else 0
+            label_w = 3 + max(len(l) for l in mix_labels) if mix_labels else 0
 
         jx = cx + width - label_w  # right junction: labels end at cx + width - 1
 
@@ -1099,25 +1034,21 @@ class EvoTUI:
             self._safe(scr, row + 1, jx, evo4_label, bus_attr)
             return
 
-        # EVO 8: interactive bus selector
-        bus = self._mixer_bus
-        bus_labels = bus_labels_all
-        attr0 = (curses.A_BOLD | curses.color_pair(C_CYAN)) if bus == 0 else dim
-        attr1 = (curses.A_BOLD | curses.color_pair(C_CYAN)) if bus == 1 else dim
+        # EVO 8: interactive mixer output selector
+        mix_output = self._mix_output
+        attr0 = (curses.A_BOLD | curses.color_pair(C_CYAN)) if mix_output == 0 else dim
+        attr1 = (curses.A_BOLD | curses.color_pair(C_CYAN)) if mix_output == 1 else dim
 
-        # Row 1: bus line + junction + OUT 1|2 label (same line as bus)
-        # ╦ when OUT 1|2 active: line continues right AND branches down to OUT 3|4
-        # ╗ when OUT 3|4 active: line terminates, drops straight down
+        # Row 1: route line + junction + first mixer output label.
         self._safe(scr, row + 1, cx, _bus_chars(), bus_attr)
-        if bus_labels:
-            pre0 = ARROW_R if bus == 0 else ARROW_R_EMPTY
-            junc = BUS_H if bus == 0 else BUS_TR
-            self._safe(scr, row + 1, jx, junc + pre0 + " " + bus_labels[0], attr0)
+        if mix_labels:
+            pre0 = ARROW_R if mix_output == 0 else ARROW_R_EMPTY
+            junc = BUS_H if mix_output == 0 else BUS_TR
+            self._safe(scr, row + 1, jx, junc + pre0 + " " + mix_labels[0], attr0)
 
-        # Row 2: ╚▶/╚▷ OUT 3|4 label
-        if len(bus_labels) > 1:
-            pre1 = ARROW_R if bus == 1 else ARROW_R_EMPTY
-            self._safe(scr, row + 2, jx, BUS_BL + pre1 + " " + bus_labels[1], attr1)
+        if len(mix_labels) > 1:
+            pre1 = ARROW_R if mix_output == 1 else ARROW_R_EMPTY
+            self._safe(scr, row + 2, jx, BUS_BL + pre1 + " " + mix_labels[1], attr1)
 
     def _draw_mixer_body(self, scr, row, cx):
         sec_ow = self._mixer_section_iw + 3
@@ -1260,7 +1191,7 @@ class EvoTUI:
         elif key in (ord("k"), curses.KEY_UP) and num_rows > 1:
             self._select_mixer_section(self._mixer_section_at((r - 1) % num_rows, c))
         elif key == ord("m") and self.spec.num_output_pairs > 1:
-            self._mixer_bus = (self._mixer_bus + 1) % self.spec.num_output_pairs
+            self._mix_output = (self._mix_output + 1) % self.spec.num_output_pairs
         elif key == ord(" "):
             self._mixer_param = (self._mixer_param + 1) % n_params
         else:
@@ -1404,13 +1335,10 @@ class DemoController:
     def set_phantom(self, target: str, on: bool):
         self._state[target]["phantom"] = on
 
-    def set_mixer_input(self, input_num, gain_db, pan=0.0, mix_bus=0):
+    def set_mixer_input(self, input_num, gain_db, pan=0.0, mix_output=0):
         pass
 
-    def set_mixer_output(self, volume_db, pan_l=-100.0, pan_r=100.0, output_pair=0, mix_bus=0):
-        pass
-
-    def set_mixer_loopback(self, volume_db, pan_l=-100.0, pan_r=100.0, mix_bus=0):
+    def set_mixer_output(self, volume_db, pan_l=-100.0, pan_r=100.0, output_pair=0, mix_output=0):
         pass
 
     def set_mixer_crosspoint(self, cn, db):

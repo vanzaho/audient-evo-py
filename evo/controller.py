@@ -9,7 +9,7 @@ Controls (same entity IDs across EVO 4/8):
   Extension Unit 56: monitor mix, [0, 127] (EVO 4 only)
   Extension Unit 58: input mute, phantom power (48V)
   Extension Unit 59: output mute
-  Mixer Unit 60: loopback mixer (dimensions vary by device)
+  Mixer Unit 60: output-source mixer (dimensions vary by device)
 """
 
 import math
@@ -31,7 +31,7 @@ _FU11 = 0x0B00  # Input gain
 # Gain step (device quantizes to 1 dB steps on all models)
 _GAIN_DB_STEP = 1.0
 
-# Mixer Unit 60 (MU60) - loopback mixer.
+# Mixer Unit 60 (MU60) - output-source mixer.
 # Write-only (GET_CUR STALLs). Uses UAC2 Q8.8 dB values.
 _MU60 = 0x3C00  # (EntityID=60 << 8) | Interface=0
 _CS_MIXER = 1  # Mixer Control selector (UAC2 standard for MU)
@@ -77,14 +77,10 @@ class EVOController:
         }
 
         # Mixer dimensions
-        self._num_channels = spec.num_output_pairs * 2
         self._mixer_max_cn = spec.mixer_inputs * spec.mixer_outputs
-        # First (num_inputs + num_output_pairs*2) inputs are mic/line + DAW channels
-        self._out_num_inputs = spec.num_inputs + spec.num_output_pairs * 2
+        # MU60 inputs are mic/line inputs followed by stereo USB output source pairs.
+        self._num_mixer_output_sources = (spec.mixer_inputs - spec.num_inputs) // 2
         self._out_num_outputs = spec.mixer_outputs
-        # Loopback inputs start after DAW inputs
-        self._loop_base_cn = self._out_num_inputs * spec.mixer_outputs
-        self._loop_num_inputs = spec.mixer_inputs - self._out_num_inputs
 
     def __enter__(self):
         self._fd = kmod.open_device(self.spec.dev_path)
@@ -404,55 +400,47 @@ class EVOController:
         return (max(_MIXER_DB_MIN, l_db), max(_MIXER_DB_MIN, r_db))
 
     def set_mixer_input(
-        self, input_num: int, gain_db: float, pan: float = 0.0, mix_bus: int = 0
+        self, input_num: int, gain_db: float, pan: float = 0.0, mix_output: int = 0
     ) -> None:
-        """Route mic/line input to loopback mix with gain and pan.
+        """Route mic/line input to a mixer output with gain and pan.
         input_num: 1-based (1 to num_inputs).
-        mix_bus: 0-based output bus (0=OUT1+2, 1=OUT3+4 on EVO 8).
+        mix_output: 0-based mixer output (0=OUT1+2, 1=OUT3+4 on EVO 8).
         """
         if not 1 <= input_num <= self.spec.num_inputs:
             raise ValueError(
                 f"input_num must be 1 to {self.spec.num_inputs}, got {input_num}"
             )
-        if not 0 <= mix_bus < self.spec.num_output_pairs:
+        if not 0 <= mix_output < self.spec.num_output_pairs:
             raise ValueError(
-                f"mix_bus must be 0 to {self.spec.num_output_pairs - 1}, got {mix_bus}"
+                f"mix_output must be 0 to {self.spec.num_output_pairs - 1}, got {mix_output}"
             )
         l_db, r_db = self._pan_to_lr_db(gain_db, pan)
-        base = (input_num - 1) * self._out_num_outputs + mix_bus * 2
+        base = (input_num - 1) * self._out_num_outputs + mix_output * 2
         self.set_mixer_crosspoint(base + 0, l_db)
         self.set_mixer_crosspoint(base + 1, r_db)
 
     def set_mixer_output(
         self, volume_db: float, pan_l: float = -100.0, pan_r: float = 100.0,
-        output_pair: int = 0, mix_bus: int = 0,
+        output_pair: int = 0, mix_output: int = 0,
     ) -> None:
-        """Route DAW playback to loopback mix.
-        output_pair: 0-based DAW pair (0=main, 1=second pair on EVO 8).
-        mix_bus: 0-based output bus (0=OUT1+2, 1=OUT3+4 on EVO 8).
+        """Route a stereo USB output source pair to a mixer output.
+        output_pair: 0-based source pair (0=OUT1+2, 1=OUT3+4, 2=OUT5+6 on EVO 8).
+        mix_output: 0-based mixer output (0=OUT1+2, 1=OUT3+4 on EVO 8).
         """
-        daw_l_in = self.spec.num_inputs + output_pair * 2
-        daw_r_in = daw_l_in + 1
+        if not 0 <= output_pair < self._num_mixer_output_sources:
+            raise ValueError(
+                f"output_pair must be 0 to {self._num_mixer_output_sources - 1}, got {output_pair}"
+            )
+        if not 0 <= mix_output < self.spec.num_output_pairs:
+            raise ValueError(
+                f"mix_output must be 0 to {self.spec.num_output_pairs - 1}, got {mix_output}"
+            )
+        output_l_in = self.spec.num_inputs + output_pair * 2
+        output_r_in = output_l_in + 1
         l_db_l, r_db_l = self._pan_to_lr_db(volume_db, pan_l)
         l_db_r, r_db_r = self._pan_to_lr_db(volume_db, pan_r)
-        out_off = mix_bus * 2
-        self.set_mixer_crosspoint(daw_l_in * self._out_num_outputs + out_off, l_db_l)
-        self.set_mixer_crosspoint(daw_l_in * self._out_num_outputs + out_off + 1, r_db_l)
-        self.set_mixer_crosspoint(daw_r_in * self._out_num_outputs + out_off, l_db_r)
-        self.set_mixer_crosspoint(daw_r_in * self._out_num_outputs + out_off + 1, r_db_r)
-
-    def set_mixer_loopback(
-        self, volume_db: float, pan_l: float = -100.0, pan_r: float = 100.0,
-        mix_bus: int = 0,
-    ) -> None:
-        """Route Loopback Output to loopback mix.
-        mix_bus: 0-based output bus (0=OUT1+2, 1=OUT3+4 on EVO 8).
-        """
-        l_db_l, r_db_l = self._pan_to_lr_db(volume_db, pan_l)
-        l_db_r, r_db_r = self._pan_to_lr_db(volume_db, pan_r)
-        n = self._out_num_outputs  # stride between loopback L and R inputs in CN space
-        out_off = mix_bus * 2
-        self.set_mixer_crosspoint(self._loop_base_cn + out_off, l_db_l)
-        self.set_mixer_crosspoint(self._loop_base_cn + out_off + 1, r_db_l)
-        self.set_mixer_crosspoint(self._loop_base_cn + n + out_off, l_db_r)
-        self.set_mixer_crosspoint(self._loop_base_cn + n + out_off + 1, r_db_r)
+        out_off = mix_output * 2
+        self.set_mixer_crosspoint(output_l_in * self._out_num_outputs + out_off, l_db_l)
+        self.set_mixer_crosspoint(output_l_in * self._out_num_outputs + out_off + 1, r_db_l)
+        self.set_mixer_crosspoint(output_r_in * self._out_num_outputs + out_off, l_db_r)
+        self.set_mixer_crosspoint(output_r_in * self._out_num_outputs + out_off + 1, r_db_r)

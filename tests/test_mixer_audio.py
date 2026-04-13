@@ -164,9 +164,9 @@ def playrec(signal, capture_dev, playback_dev):
     return captured
 
 
-def _daw_l_cn(device_spec, mix_bus=0):
-    """CN index for DAW L -> Loopback L on the given mix bus."""
-    return device_spec.num_inputs * device_spec.mixer_outputs + mix_bus * 2
+def _daw_l_cn(device_spec, mix_output=0):
+    """CN index for DAW L -> Loopback L on the given mixer output."""
+    return device_spec.num_inputs * device_spec.mixer_outputs + mix_output * 2
 
 
 # -- Tests: baseline --
@@ -337,21 +337,24 @@ class TestMixerOutput:
         assert abs(l - r) < 3.0, f"Channels should be ~equal: L={l:.1f}, R={r:.1f} dBFS"
 
 
-class TestMixerLoopback:
-    """Test set_mixer_loopback() high-level routing."""
+class TestMixerFinalOutputSource:
+    """Test high-level routing for the final USB output source pair."""
 
-    def test_default_stereo(self, evo, loop_out, loop_cap):
-        """Default pans produce stereo loopback-to-loopback routing."""
-        evo.set_mixer_loopback(0.0)
+    def _final_output_pair(self, device_spec):
+        return (device_spec.mixer_inputs - device_spec.num_inputs) // 2 - 1
+
+    def test_default_stereo(self, evo, device_spec, loop_out, loop_cap):
+        """Default pans produce stereo routing for the final output source pair."""
+        evo.set_mixer_output(0.0, output_pair=self._final_output_pair(device_spec))
         sig = stereo(sine(), left=True, right=True)
         cap = playrec(sig, loop_cap, loop_out)
         l, r = levels(cap)
         assert l > PRESENT, f"Left: {l:.1f} dBFS"
         assert r > PRESENT, f"Right: {r:.1f} dBFS"
 
-    def test_left_only(self, evo, loop_out, loop_cap):
-        """Left-only loopback out -> left-only loopback capture."""
-        evo.set_mixer_loopback(0.0)
+    def test_left_only(self, evo, device_spec, loop_out, loop_cap):
+        """Left-only final output source -> left-only capture."""
+        evo.set_mixer_output(0.0, output_pair=self._final_output_pair(device_spec))
         sig = stereo(sine(), left=True, right=False)
         cap = playrec(sig, loop_cap, loop_out)
         l, r = levels(cap)

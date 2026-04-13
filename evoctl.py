@@ -1,9 +1,9 @@
 import argparse
 import errno
 import sys
+from evo import config as cfg
 from evo.controller import EVOController
 from evo.devices import DEVICES, detect_devices
-from evo.config import config_file
 
 
 def _resolve_device():
@@ -30,7 +30,7 @@ def parse_args(spec):
     parameters = ["volume", "gain", "mute", "phantom"]
     if spec.has_monitor:
         parameters.insert(3, "monitor")
-    cf = config_file(spec.name)
+    cf = cfg.config_file(spec.name)
 
     parser = argparse.ArgumentParser(description=f"Audient {spec.display_name} config tool.")
     parser.add_argument(
@@ -57,24 +57,41 @@ def parse_args(spec):
     load_p.add_argument("path", nargs="?", default=None, help=f"Defa: {cf}.")
 
     # Mixer
-    mixer_p = sparser.add_parser("mixer", aliases=["m"], help="Loopback mixer config.")
+    mixer_p = sparser.add_parser("mixer", aliases=["m"], help="Mixer matrix config.")
     mixer_sp = mixer_p.add_subparsers(dest="mixer_section", required=True)
 
     _VOLUME_HELP = "dB (mute) <-128,6> (gain). 0 == pass as is."
-    _MIX_BUS_HELP = "Mix output bus (0=OUT1+2, 1=OUT3+4). Default: 0."
+    mix_choices = range(spec.num_output_pairs)
+    mix_help = ", ".join(
+        f"{i}=MIX {cfg.mix_output_label(spec, i)}" for i in mix_choices
+    )
+    _MIX_OUTPUT_HELP = f"Mixer destination ({mix_help}). Default: 0."
     for i in range(spec.num_inputs):
         inp = f"input{i+1}"
-        inp_p = mixer_sp.add_parser(inp, help=f"Set {inp} level in loopback mix.")
+        inp_p = mixer_sp.add_parser(inp, help=f"Set {inp} level in mixer output.")
+        inp_p.set_defaults(input_num=i + 1)
         inp_p.add_argument("--volume", type=float, required=True, help=_VOLUME_HELP)
         inp_p.add_argument(
             "--pan", type=float, default=0.0,
             help="(left) <-100,100> (right). Default: 0 (center).",
         )
-        if spec.num_output_pairs > 1:
-            inp_p.add_argument("--mix-bus", type=int, default=0, help=_MIX_BUS_HELP)
+        inp_p.add_argument(
+            "--mix-output",
+            dest="mix_output",
+            type=int,
+            choices=mix_choices,
+            default=0,
+            help=_MIX_OUTPUT_HELP,
+        )
 
-    for out in ("output", "loopback"):
-        out_p = mixer_sp.add_parser(out, help=f"Set {out} level in loopback mix.")
+    for pair in range(cfg.num_mixer_output_sources(spec)):
+        out = cfg.output_key(pair)
+        suffix = " (loopback)" if pair >= spec.num_output_pairs else ""
+        out_p = mixer_sp.add_parser(
+            out,
+            help=f"Set OUT {cfg.stereo_pair_label(pair)}{suffix} level in mixer output.",
+        )
+        out_p.set_defaults(output_pair=pair)
         out_p.add_argument("--volume", type=float, required=True, help=_VOLUME_HELP)
         out_p.add_argument(
             "--pan-l", type=float, default=-100.0,
@@ -84,8 +101,14 @@ def parse_args(spec):
             "--pan-r", type=float, default=100.0,
             help="R channel (left) <-100,100> (right). Default: 100.",
         )
-        if spec.num_output_pairs > 1:
-            out_p.add_argument("--mix-bus", type=int, default=0, help=_MIX_BUS_HELP)
+        out_p.add_argument(
+            "--mix-output",
+            dest="mix_output",
+            type=int,
+            choices=mix_choices,
+            default=0,
+            help=_MIX_OUTPUT_HELP,
+        )
 
     args = parser.parse_args()
 
@@ -224,47 +247,42 @@ def _run(args, evo: EVOController):
             print(f"[SET] Phantom 48V {args.target}: {'on' if args.value else 'off'}")
 
     elif args.action in ("mixer", "m"):
-        from evo.config import default_mixer_state, load_mixer_state, save_mixer_state
-
         sec = args.mixer_section
-        mix_bus = getattr(args, "mix_bus", 0)
-        state = load_mixer_state(spec.name) or default_mixer_state(spec)
-        bus = state["buses"][mix_bus]
-        if sec.startswith("input"):
-            num = int(sec[-1])
-            evo.set_mixer_input(num, args.volume, args.pan, mix_bus)
-            bus["inputs"][sec] = {"volume": args.volume, "pan": args.pan}
-            bus_suffix = f" (bus {mix_bus})" if mix_bus else ""
+        mix_output = getattr(args, "mix_output", 0)
+        state = cfg.load_or_default_mixer_state(spec)
+        if hasattr(args, "input_num"):
+            evo.set_mixer_input(args.input_num, args.volume, args.pan, mix_output)
+            cfg.update_mixer_input_state(
+                state, spec, args.input_num, args.volume, args.pan, mix_output
+            )
+            mix_suffix = f" (mix {cfg.mix_output_label(spec, mix_output)})"
             print(
-                f"[SET] Mixer {sec}{bus_suffix}: volume={args.volume:+.1f} dB, "
+                f"[SET] Mixer {sec}{mix_suffix}: volume={args.volume:+.1f} dB, "
                 f"pan={args.pan:+.0f}"
             )
-        elif sec == "output":
-            evo.set_mixer_output(args.volume, args.pan_l, args.pan_r, mix_bus=mix_bus)
-            bus["outputs"]["output_pair1"] = {
-                "output_pair": 0,
-                "volume": args.volume,
-                "pan_l": args.pan_l,
-                "pan_r": args.pan_r,
-            }
-            bus_suffix = f" (bus {mix_bus})" if mix_bus else ""
+        elif hasattr(args, "output_pair"):
+            evo.set_mixer_output(
+                args.volume,
+                args.pan_l,
+                args.pan_r,
+                output_pair=args.output_pair,
+                mix_output=mix_output,
+            )
+            cfg.update_mixer_output_state(
+                state,
+                spec,
+                args.output_pair,
+                args.volume,
+                args.pan_l,
+                args.pan_r,
+                mix_output,
+            )
+            mix_suffix = f" (mix {cfg.mix_output_label(spec, mix_output)})"
             print(
-                f"[SET] Mixer output{bus_suffix}: volume={args.volume:+.1f} dB, "
+                f"[SET] Mixer {sec}{mix_suffix}: volume={args.volume:+.1f} dB, "
                 f"pan_l={args.pan_l:+.0f}, pan_r={args.pan_r:+.0f}"
             )
-        elif sec == "loopback":
-            evo.set_mixer_loopback(args.volume, args.pan_l, args.pan_r, mix_bus)
-            bus["loopback"] = {
-                "volume": args.volume,
-                "pan_l": args.pan_l,
-                "pan_r": args.pan_r,
-            }
-            bus_suffix = f" (bus {mix_bus})" if mix_bus else ""
-            print(
-                f"[SET] Mixer loopback{bus_suffix}: volume={args.volume:+.1f} dB, "
-                f"pan_l={args.pan_l:+.0f}, pan_r={args.pan_r:+.0f}"
-            )
-        save_mixer_state(spec.name, state)
+        cfg.save_mixer_state(spec.name, state)
 
     elif args.action == "save":
         from evo.config import save

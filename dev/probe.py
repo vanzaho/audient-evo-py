@@ -32,7 +32,8 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from evo4 import kmod as evo4_kmod
+from evo import kmod as evo4_kmod
+from evo.devices import EVO4
 
 # Known entities from USB descriptors
 KNOWN_UNITS = {
@@ -144,7 +145,7 @@ def main():
         print(f"Known units: {', '.join(f'{k}=0x{v[0]:04X}' for k, v in KNOWN_UNITS.items())}")
         sys.exit(1)
 
-    with evo4_kmod.open_device() as fd:
+    with evo4_kmod.open_device(EVO4.dev_path) as fd:
         cmd = sys.argv[1]
 
         if cmd == "scan":

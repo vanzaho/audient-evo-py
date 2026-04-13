@@ -242,7 +242,7 @@ larger matrix (10x4=40 cross-points) but same addressing formula.
 
 ## Pan Law
 
-`set_mixer_input()` and `set_mixer_output/loopback()` use equal-power panning:
+`set_mixer_input()` and `set_mixer_output()` use equal-power panning:
 
 ```
 p = (pan + 100) / 200        # normalize to [0, 1]

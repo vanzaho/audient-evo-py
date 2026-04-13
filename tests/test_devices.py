@@ -34,7 +34,7 @@ class TestDeviceSpec:
 
     def test_frozen(self):
         with pytest.raises(AttributeError):
-            EVO4.name = "modified"
+            setattr(EVO4, "name", "modified")
 
     def test_registry_contains_both(self):
         assert "evo4" in DEVICES

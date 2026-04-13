@@ -81,17 +81,17 @@ R: wValue = 0x0101 + (4 * input) + (2 * output_num)
 ```
 
 This means:
-- `output_num=0` → out_idx 0, 1 (mix bus for OUT1+2)
-- `output_num=1` → out_idx 2, 3 (mix bus for OUT3+4)
+- `output_num=0` -> out_idx 0, 1 (mixer output for OUT1+2)
+- `output_num=1` -> out_idx 2, 3 (mixer output for OUT3+4)
 
-The EVO 8 mixer has **two independent stereo mix buses**: one feeding each output
-pair's monitoring/loopback context. The `set_mixer_input`, `set_mixer_output`, and
-`set_mixer_loopback` methods now accept a `mix_bus` parameter (0-based, default 0).
+The EVO 8 mixer has **two independent stereo mixer outputs**: one feeding each output
+pair's monitoring/loopback context. The high-level mixer methods accept a
+`mix_output` parameter (0-based, default 0).
 
-Additionally, `set_mixer_loopback` had a latent stride bug for EVO 8: it was writing
-to loopback_L × out_2 and loopback_L × out_3 instead of loopback_R × out_0 and
-loopback_R × out_1 (because the stride between loopback L and R inputs is
-`mixer_outputs = 4`, not 2). Fixed by using `_out_num_outputs` as the stride.
+Additionally, the final USB output source pair had a latent stride bug for EVO 8:
+it was writing to loopback_L × out_2 and loopback_L × out_3 instead of loopback_R ×
+out_0 and loopback_R × out_1. Treating OUT5+6 as `set_mixer_output(...,
+output_pair=2)` now uses the same CN formula as every other stereo output source.
 
 ### Correct mixer output layout (EVO 8)
 
@@ -112,5 +112,5 @@ loopback_R × out_1 (because the stride between loopback L and R inputs is
 | Mute ordering | Unverified - needs hardware test |
 | Output volume (EU59 vs FU10) | Unverified - both likely work |
 | Mixer dB encoding | Arduino likely wrong; our UAC2 encoding is correct |
-| Mixer output assignment | **Fixed** - out_idx 2,3 are mix bus 1, not reserved |
-| Mixer loopback stride | **Fixed** - stride was wrong for EVO 8 |
+| Mixer output assignment | **Fixed** - out_idx 2,3 are mixer output 1, not reserved |
+| Final output source stride | **Fixed** - OUT5+6 now uses the same CN formula as other output sources |
