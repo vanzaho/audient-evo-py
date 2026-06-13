@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "audient-evo"
-version = "0.2.0"
+version = "0.2.1"
 description = "Linux controller for Audient EVO USB audio interfaces"
 license = "Unlicense"
 requires-python = ">=3.10"
