@@ -23,7 +23,7 @@ pipx inject audient-evo pytest
 pipx inject audient-evo numpy sounddevice  # audio tests only
 
 # WirePlumber config (needed for mixer audio tests)
-bash wireplumber/install.sh     # select EVO 8 when prompted
+bash dev/wireplumber/evo8/install.sh
 wpctl status | grep -i evo      # should show EVO 8 nodes and defaults
 ```
 
@@ -162,7 +162,7 @@ python -m pytest tests/test_mixer_mic.py -vs --hardware --audio --manual
 ## Uninstall
 
 ```bash
-bash wireplumber/uninstall.sh
+bash dev/wireplumber/evo8/uninstall.sh
 cd kmod && sudo ./uninstall.sh
 pipx uninstall audient-evo-py
 ```

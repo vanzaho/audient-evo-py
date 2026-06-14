@@ -263,10 +263,10 @@ keep the device active when nothing is recording.
 
 | File | Installed to |
 |---|---|
-| `wireplumber/evo8/51-evo8.conf` | `~/.config/wireplumber/wireplumber.conf.d/` |
-| `wireplumber/evo8/evo8-stereo.conf` | `~/.config/pipewire/pipewire.conf.d/` |
-| `wireplumber/evo8/evo8-setup.sh` | `~/.local/bin/evo8-setup.sh` |
-| `wireplumber/evo8/evo8-setup.service` | `~/.config/systemd/user/` |
+| `dev/wireplumber/evo8/51-evo8.conf` | `~/.config/wireplumber/wireplumber.conf.d/` |
+| `dev/wireplumber/evo8/evo8-stereo.conf` | `~/.config/pipewire/pipewire.conf.d/` |
+| `dev/wireplumber/evo8/evo8-setup.sh` | `~/.local/bin/evo8-setup.sh` |
+| `dev/wireplumber/evo8/evo8-setup.service` | `~/.config/systemd/user/` |
 
 `evo8-setup.service` runs once at login to set the EVO 8 as the default PulseAudio
 sink/source via `pactl`.

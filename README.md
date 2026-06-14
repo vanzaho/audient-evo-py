@@ -63,30 +63,21 @@ cd kmod
 sudo ./install.sh
 ```
 
-### WirePlumber config (optional, recommended)
+### WirePlumber config
 
-Without explicit configuration, EVO devices expose extra USB audio channels that PipeWire treats as surround. The `wireplumber/install.sh` script prompts for your device and sets up:
+EVO 4 needs none - covered by `alsa-ucm-conf >= 1.2.16`. An EVO 8 reference
+config lives under [dev/wireplumber/](dev/wireplumber/README.md).
 
-- Explicit main-output stereo sink (`evo4_main_output` or `evo8_main_output`)
-- Extra stereo sinks/sources for second output pairs and loopback routing
-- Upmix disabled on the raw ALSA sink, keeping non-main channels clean
-- Idle suspension disabled (prevents clicks on stream start)
-- Default sink/source at login
+### 96 kHz playback
 
-```bash
-bash wireplumber/install.sh
-```
-
-See [wireplumber/README.md](wireplumber/README.md) for signal flow diagrams and details.
+PipeWire defaults to 48 kHz; to allow native 96 kHz, follow [Arch wiki -
+PipeWire: Changing the allowed sample rate(s)](https://wiki.archlinux.org/title/PipeWire#Changing_the_allowed_sample_rate(s)).
 
 ## Uninstall
 
 ```bash
 # Kernel module
 sudo ./kmod/uninstall.sh
-
-# Wireplumber config
-./wireplumber/uninstall.sh
 
 # evoctl & evotui
 pipx uninstall audient-evo-py

@@ -16,6 +16,7 @@ Requirements:
 Run with: pytest tests/test_mixer_audio.py --hardware --audio --device evo4
 """
 
+import re
 import time
 
 import pytest
@@ -40,42 +41,55 @@ TRIM = 0.25             # seconds trimmed from each end to skip latency transien
 PRESENT = -40.0         # above -> signal present
 ABSENT = -60.0          # below -> considered silent
 
-# PipeWire node name prefixes by device
-# NOTE: EVO 8 names may need adjustment based on tester feedback
+# Device name patterns (regex, fullmatch against PortAudio device name
+# before the first comma). For EVO 4 the Line2_source ("Loopback" stereo
+# capture) shares its description with the Line1_sink ("Loopback" stereo
+# playback), so PortAudio disambiguates the input-only one with a volatile
+# "-<node-id>" suffix - hence the optional trailing digits in loop_cap.
+# EVO 8 patterns come from dev/wireplumber/evo8/evo8-stereo.conf descriptions
+# and may need adjustment based on tester feedback.
 _NODE_NAMES = {
     "evo4": {
-        "daw_out": "EVO4 Main Output",
-        "loop_out": "EVO4 Loopback Output",
-        "loop_cap": "EVO4 Loopback",
+        "daw_out": r"EVO4 Headphone / Line Out",
+        "loop_out": r"EVO4 Loopback",
+        "loop_cap": r"EVO4 Loopback-\d+",
     },
     "evo8": {
-        "daw_out": "EVO8 Main Output",
-        "loop_out": "EVO8 Loopback Output",
-        "loop_cap": "EVO8 Loopback",
+        "daw_out": r"EVO8 Main Output",
+        "loop_out": r"EVO8 Loopback Output",
+        "loop_cap": r"EVO8 Loopback",
     },
 }
 
 
 # -- Helpers --
 
-def _find_device(name, kind):
-    """Find sounddevice index by exact device description and 'input'/'output'.
+def _find_device(pattern, kind):
+    """Find sounddevice index whose description fullmatches `pattern` for `kind`.
 
-    Device names from sounddevice look like 'EVO4 Main Output, JACK Audio ...',
-    so we match the part before the first comma.
+    Device names from sounddevice look like 'EVO4 Loopback, JACK Audio ...',
+    so we match the part before the first comma. `pattern` is a regex
+    (re.fullmatch) to cope with volatile suffixes the JACK backend appends
+    when two PipeWire nodes share a description.
     """
+    rx = re.compile(pattern)
     key = f"max_{kind}_channels"
     for i, d in enumerate(sd.query_devices()):
         desc = d["name"].split(",")[0]
-        if desc == name and d[key] > 0:
+        if rx.fullmatch(desc) and d[key] > 0:
             return i
-    raise RuntimeError(f"No {kind} device named '{name}'")
+    raise RuntimeError(f"No {kind} device matching '{pattern}'")
 
 
 def sine(freq=TONE_HZ, duration=DURATION):
-    """Mono float32 sine at 90% amplitude."""
+    """Mono float32 sine at low amplitude.
+
+    Kept well below full-scale so a connected headphone/monitor is not
+    painful during long test runs. ~-20 dBFS still gives >20 dB margin
+    above PRESENT / ABSENT detection thresholds.
+    """
     t = np.arange(int(SAMPLE_RATE * duration), dtype=np.float32) / SAMPLE_RATE
-    return np.float32(0.9) * np.sin(np.float32(2 * np.pi * freq) * t)
+    return np.float32(0.1) * np.sin(np.float32(2 * np.pi * freq) * t)
 
 
 def stereo(mono, *, left=True, right=True):
