@@ -10,6 +10,7 @@
  */
 
 #include <linux/fs.h>
+#include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -48,14 +49,28 @@ struct evo_device {
     struct usb_device *udev;
     struct miscdevice misc;
     struct mutex lock;
+    struct kref kref;
     char name[8]; /* "evo4" or "evo8" */
 };
 
+static void evo_delete(struct kref *kref)
+{
+    struct evo_device *dev = container_of_const(kref, struct evo_device, kref);
+    kfree(dev);
+}
+
 static int evo_open(struct inode *inode, struct file *file)
 {
-    struct evo_device *dev =
-        container_of(file->private_data, struct evo_device, misc);
+    struct evo_device *dev = container_of_const(file->private_data, struct evo_device, misc);
+    kref_get(&dev->kref);
     file->private_data = dev;
+    return 0;
+}
+
+static int evo_release(struct inode *inode, struct file *file)
+{
+    struct evo_device *dev = file->private_data;
+    kref_put(&dev->kref, evo_delete);
     return 0;
 }
 
@@ -77,7 +92,7 @@ static long evo_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         return -EINVAL;
 
     /* usb_control_msg requires a DMA-able buffer, not stack memory */
-    dmabuf = kmalloc(xfer.wLength, GFP_KERNEL);
+    dmabuf = kmalloc(xfer.wLength ?: 1, GFP_KERNEL);
     if (!dmabuf)
         return -ENOMEM;
 
@@ -99,9 +114,8 @@ static long evo_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     else
         pipe = usb_sndctrlpipe(dev->udev, 0);
 
-    ret = usb_control_msg(dev->udev, pipe, xfer.bRequest, xfer.bRequestType,
-                          xfer.wValue, xfer.wIndex, dmabuf, xfer.wLength,
-                          1000 /* 1s timeout */);
+    ret = usb_control_msg(dev->udev, pipe, xfer.bRequest, xfer.bRequestType, xfer.wValue,
+                          xfer.wIndex, dmabuf, xfer.wLength, 1000 /* 1s timeout */);
 
     mutex_unlock(&dev->lock);
 
@@ -127,6 +141,7 @@ static long evo_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 static const struct file_operations evo_fops = {
     .owner = THIS_MODULE,
     .open = evo_open,
+    .release = evo_release,
     .unlocked_ioctl = evo_ioctl,
 };
 
@@ -164,6 +179,7 @@ static int evo_probe(struct usb_interface *intf, const struct usb_device_id *id)
         return -ENOMEM;
 
     mutex_init(&dev->lock);
+    kref_init(&dev->kref);
     strscpy(dev->name, name, sizeof(dev->name));
     dev->udev = usb_get_dev(udev);
     dev->misc.minor = MISC_DYNAMIC_MINOR;
@@ -177,8 +193,7 @@ static int evo_probe(struct usb_interface *intf, const struct usb_device_id *id)
         return -ENODEV;
     }
 
-    dev_info(&intf->dev, "Audient %s raw control registered at /dev/%s\n",
-             dev->name, dev->name);
+    dev_info(&intf->dev, "Audient %s raw control registered at /dev/%s\n", dev->name, dev->name);
     usb_set_intfdata(intf, dev);
     return 0;
 }
@@ -197,13 +212,11 @@ static void evo_disconnect(struct usb_interface *intf)
     mutex_unlock(&dev->lock);
 
     dev_info(&intf->dev, "Audient %s raw control disconnected\n", dev->name);
-    kfree(dev);
+    kref_put(&dev->kref, evo_delete);
 }
 
 static const struct usb_device_id evo_id_table[] = {
-    {USB_DEVICE(AUDIENT_VID, EVO4_PID)},
-    {USB_DEVICE(AUDIENT_VID, EVO8_PID)},
-    {}};
+    {USB_DEVICE(AUDIENT_VID, EVO4_PID)}, {USB_DEVICE(AUDIENT_VID, EVO8_PID)}, {}};
 MODULE_DEVICE_TABLE(usb, evo_id_table);
 
 static struct usb_driver evo_driver = {
