@@ -26,3 +26,5 @@ build/
 Dockerfile
 docker-compose.yml
 .dockerignore
+
+kmod/compile_commands.json
