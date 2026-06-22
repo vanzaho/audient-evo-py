@@ -1,0 +1,4 @@
+# Allow users in "dialout" group to access /dev/evo*
+# and sets up service to auto-load saved config when device appears
+KERNEL=="evo4|evo8", SUBSYSTEM=="misc", GROUP="dialout", MODE="0660", \
+  TAG+="systemd", ENV{SYSTEMD_USER_WANTS}="evo-load-config@$kernel.service"

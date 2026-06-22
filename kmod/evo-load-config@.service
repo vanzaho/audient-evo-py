@@ -1,0 +1,12 @@
+[Unit]
+Description=Load Audient %i configuration on device connection
+ConditionPathExists=/dev/%i
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/evoctl --device %i load
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

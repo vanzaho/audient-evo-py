@@ -1,10 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-MODULE_NAME="evo_raw"
-MODULE_VERSION="0.1"
-SRC_DIR="/usr/src/${MODULE_NAME}-${MODULE_VERSION}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ ! -f "$SCRIPT_DIR/dkms.conf" ]]; then
+    echo "Error: dkms.conf not found next to this script."
+    exit 1
+fi
+
+# Single source of truth for the module name/version: dkms.conf.
+# Extract just these two assignments so the rest of dkms.conf (arrays, MAKE,
+# ${kernelver}) isn't evaluated under this script's `set -u`.
+eval "$(grep -E '^PACKAGE_(NAME|VERSION)=' "$SCRIPT_DIR/dkms.conf")"
+MODULE_NAME="$PACKAGE_NAME"
+MODULE_VERSION="$PACKAGE_VERSION"
+SRC_DIR="/usr/src/${MODULE_NAME}-${MODULE_VERSION}"
 
 if [[ $EUID -ne 0 ]]; then
     echo "This script must be run as root (use sudo)."
@@ -44,96 +54,54 @@ else
     fi
 fi
 
-# Device selection - discover available devices from udev rule files
-AVAILABLE=()
-for rule in "$SCRIPT_DIR"/99-evo*.rules; do
-    [[ -f "$rule" ]] || continue
-    dev=$(basename "$rule" .rules)
-    dev="${dev#99-}"
-    AVAILABLE+=("$dev")
-done
+# One udev rule + systemd template cover both models; no device choice needed.
+DEVICES=(evo4 evo8)
 
-if [[ ${#AVAILABLE[@]} -eq 0 ]]; then
-    echo "Error: no 99-evo*.rules files found in $SCRIPT_DIR"
+if [[ ! -f "$SCRIPT_DIR/99-evo.rules" ]]; then
+    echo "Error: 99-evo.rules not found in $SCRIPT_DIR"
     exit 1
 fi
 
-echo "Which device do you want to set up?"
-for i in "${!AVAILABLE[@]}"; do
-    echo "  $((i+1))) ${AVAILABLE[$i]}"
-done
-read -p "Select [1-${#AVAILABLE[@]}]: " -n 1 -r DEVICE_CHOICE
-echo ""
-
-if ! [[ "$DEVICE_CHOICE" =~ ^[0-9]+$ ]] || (( DEVICE_CHOICE < 1 || DEVICE_CHOICE > ${#AVAILABLE[@]} )); then
-    echo "Invalid choice."
-    exit 1
+# Clean up any legacy evo4_raw install before (re)installing
+if lsmod | grep -q "^evo4_raw"; then
+    echo "Unloading legacy evo4_raw module..."
+    rmmod evo4_raw
 fi
-
-SELECTED="${AVAILABLE[$((DEVICE_CHOICE-1))]}"
-DEVICES=("$SELECTED")
+if [[ $USE_DKMS -eq 1 ]] && dkms status "evo4_raw/${MODULE_VERSION}" 2>/dev/null | grep -q "evo4_raw"; then
+    echo "Removing legacy evo4_raw DKMS module..."
+    dkms remove "evo4_raw/${MODULE_VERSION}" --all
+fi
 
 if [[ $USE_DKMS -eq 1 ]]; then
-    # DKMS install
-
-    # Remove previous version if installed
     if dkms status "${MODULE_NAME}/${MODULE_VERSION}" 2>/dev/null | grep -q "${MODULE_NAME}"; then
         echo "Removing existing DKMS module..."
         dkms remove "${MODULE_NAME}/${MODULE_VERSION}" --all
     fi
 
-    # Also remove legacy evo4_raw if present
-    if dkms status "evo4_raw/${MODULE_VERSION}" 2>/dev/null | grep -q "evo4_raw"; then
-        echo "Removing legacy evo4_raw DKMS module..."
-        dkms remove "evo4_raw/${MODULE_VERSION}" --all
-    fi
-    if lsmod | grep -q "^evo4_raw"; then
-        echo "Unloading legacy evo4_raw module..."
-        rmmod evo4_raw
-    fi
-
-    # Copy source to /usr/src
     echo "Copying module source to ${SRC_DIR}..."
     rm -rf "$SRC_DIR"
     mkdir -p "$SRC_DIR"
     cp "$SCRIPT_DIR"/{evo_raw.c,Makefile,dkms.conf} "$SRC_DIR/"
 
-    echo "Adding module to DKMS..."
+    echo "Adding, building and installing via DKMS..."
     dkms add "${MODULE_NAME}/${MODULE_VERSION}"
-
-    echo "Building module..."
     dkms build "${MODULE_NAME}/${MODULE_VERSION}"
-
-    echo "Installing module..."
     dkms install "${MODULE_NAME}/${MODULE_VERSION}"
 else
-    # Manual install (no DKMS)
-
-    # Remove legacy evo4_raw if present
-    if lsmod | grep -q "^evo4_raw"; then
-        echo "Unloading legacy evo4_raw module..."
-        rmmod evo4_raw
-    fi
-
     echo "Building module..."
     make -C "$SCRIPT_DIR" all
 
     echo "Installing module..."
     make -C "$SCRIPT_DIR" install
 
-    # Enable auto-load on boot
-    echo "$MODULE_NAME" > /etc/modules-load.d/evo_raw.conf
+    echo "$MODULE_NAME" > /etc/modules-load.d/evo_raw.conf  # auto-load on boot
 fi
 
-# Install udev rules for selected devices
-for dev in "${DEVICES[@]}"; do
-    UDEV_RULE="99-${dev}.rules"
-    echo "Installing udev rule for ${dev}..."
-    cp "$SCRIPT_DIR/${UDEV_RULE}" /etc/udev/rules.d/
-done
+# Install udev rule (covers both EVO4 and EVO8)
+echo "Installing udev rule..."
+cp "$SCRIPT_DIR/99-evo.rules" /etc/udev/rules.d/
 udevadm control --reload-rules
 
-# Load module
 echo "Loading module..."
 modprobe "$MODULE_NAME"
 
@@ -143,7 +111,7 @@ if [[ -n "${SUDO_USER:-}" ]]; then
         echo "User '$SUDO_USER' is already in the 'dialout' group."
     else
         echo ""
-        echo "Users must be in the 'dialout' group to access /dev/${SELECTED} without sudo."
+        echo "Users must be in the 'dialout' group to access /dev/evo4 or /dev/evo8 without sudo."
         read -p "Add '$SUDO_USER' to the 'dialout' group now? (y/n) " -n 1 -r
         echo ""
         if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -176,23 +144,21 @@ if [[ $SETUP_AUTOLOAD =~ ^[Yy]$ ]]; then
             SYSTEMD_USER_DIR="$TARGET_HOME/.config/systemd/user"
             TARGET_UID=$(id -u "$TARGET_USER")
 
+            echo "Installing auto-load service template (user: $TARGET_USER)"
+            install -D -o "$TARGET_USER" -g "$TARGET_USER" -m 644 \
+                "$SCRIPT_DIR/evo-load-config@.service" \
+                "$SYSTEMD_USER_DIR/evo-load-config@.service"
+
+            sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$TARGET_UID" systemctl --user daemon-reload
             for dev in "${DEVICES[@]}"; do
-                SERVICE="${dev}-load-config.service"
-                echo "Setting up auto-load for ${dev} (user: $TARGET_USER)"
-
-                install -D -o "$TARGET_USER" -g "$TARGET_USER" -m 644 \
-                    "$SCRIPT_DIR/${SERVICE}" \
-                    "$SYSTEMD_USER_DIR/${SERVICE}"
-
-                sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$TARGET_UID" systemctl --user daemon-reload
-                sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$TARGET_UID" systemctl --user enable "${SERVICE}"
+                sudo -u "$TARGET_USER" XDG_RUNTIME_DIR="/run/user/$TARGET_UID" systemctl --user enable "evo-load-config@${dev}.service"
             done
 
             echo "Auto-load config enabled."
             echo ""
             echo "To test, reconnect your device or log out and back in."
             for dev in "${DEVICES[@]}"; do
-                echo "View logs with: journalctl --user -u ${dev}-load-config.service -f"
+                echo "View logs with: journalctl --user -u evo-load-config@${dev}.service -f"
             done
         else
             echo "Error: 'evoctl' not found at $EVOCTL_PATH"
