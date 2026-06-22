@@ -74,11 +74,40 @@ static int evo_release(struct inode *inode, struct file *file)
     return 0;
 }
 
+/* Control-transfer helper, used by: 1. ioctl, 2. ALSA kcontrol.
+ * <data> must be a DMA-able buffer.
+ *
+ * Returns bytes trasferred or -errno.
+ */
+static int evo_ctrl(struct evo_device *dev, __u8 bRequest, __u8 bRequestType, __u16 wValue,
+                    __u16 wIndex, void *data, __u16 wLength)
+{
+    unsigned int pipe;
+    int ret;
+
+    mutex_lock(&dev->lock);
+
+    if (!dev->udev) {
+        mutex_unlock(&dev->lock);
+        return -ENODEV;
+    }
+
+    if (bRequestType & USB_DIR_IN)
+        pipe = usb_rcvctrlpipe(dev->udev, 0);
+    else
+        pipe = usb_sndctrlpipe(dev->udev, 0);
+
+    ret = usb_control_msg(dev->udev, pipe, bRequest, bRequestType, wValue, wIndex, data, wLength,
+                          1000);
+
+    mutex_unlock(&dev->lock);
+    return ret;
+}
+
 static long evo_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct evo_device *dev = file->private_data;
     struct evo_ctrl_xfer xfer;
-    unsigned int pipe;
     void *dmabuf;
     int ret;
 
@@ -100,24 +129,8 @@ static long evo_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     if (!(xfer.bRequestType & USB_DIR_IN))
         memcpy(dmabuf, xfer.data, xfer.wLength);
 
-    mutex_lock(&dev->lock);
-
-    if (!dev->udev) {
-        mutex_unlock(&dev->lock);
-        kfree(dmabuf);
-        return -ENODEV;
-    }
-
-    /* Build the correct pipe based on transfer direction */
-    if (xfer.bRequestType & USB_DIR_IN)
-        pipe = usb_rcvctrlpipe(dev->udev, 0);
-    else
-        pipe = usb_sndctrlpipe(dev->udev, 0);
-
-    ret = usb_control_msg(dev->udev, pipe, xfer.bRequest, xfer.bRequestType, xfer.wValue,
-                          xfer.wIndex, dmabuf, xfer.wLength, 1000 /* 1s timeout */);
-
-    mutex_unlock(&dev->lock);
+    ret = evo_ctrl(dev, xfer.bRequest, xfer.bRequestType, xfer.wValue, xfer.wIndex, dmabuf,
+                   xfer.wLength);
 
     if (ret < 0) {
         kfree(dmabuf);
