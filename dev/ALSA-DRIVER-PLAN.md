@@ -211,13 +211,85 @@ call it. That refactor *is* the fusion.
 
 ## 8. Open questions to resolve before / during build
 
-- [ ] Does EVO 4 expose a status/interrupt endpoint for HW-change events?
-      (`lsusb -v`, look at interface 3 / any HID/interrupt EP).
+- [x] Does EVO 4 expose a status/interrupt endpoint for HW-change events?
+      YES, but on **interface 0** (UAC2 audio control, owned by
+      `snd-usb-audio`): `EP 0x83 IN, Interrupt, bInterval 8`. Interface 3
+      (our bind) has **0 endpoints**. We cannot cleanly own the notification
+      stream from Option B - see §9.
 - [ ] Exact set of meter values and their GET request shape.
 - [ ] Naming conventions for the kcontrols so PipeWire/WirePlumber route them
       sensibly (study Scarlett2 control names).
 - [ ] Whether to keep `/dev/evo4` ioctl long-term or retire it once all
       controls are native (keep it for now - zero-risk fusion).
+
+---
+
+## 9. Findings (session 2026-06-22)
+
+### Progress
+- Steps 1-3 done and verified on hardware:
+  1. `evo_ctrl()` helper extracted from `evo_ioctl` (the "fusion" - one shared
+     locked transfer path). Python TUI unchanged.
+  2. Empty control-only card registered (`snd_card_new` + `snd_card_register`
+     in probe, `snd_card_free` in disconnect *before* taking `dev->lock`).
+     Shows as a separate card in `/proc/asound/cards` (e.g. card 4 "Mixer").
+  3. First control: `input1` phantom (`wValue 0x0000`, `wIndex 0x3A00`, 4-byte
+     LE, `1`=on), served from a software cache, written via `evo_set_bool`.
+     `.put` returns 1=changed / 0=unchanged / -errno. Verified vs LED + Python.
+
+### Two-card situation (Option B reality)
+- Out-of-tree module **cannot** add kcontrols to card 0 (EVO4) - only the
+  card's owner (`snd-usb-audio`) can. So our controls live on a **second,
+  control-only card** (no PCM).
+- Downside: not auto-associated with the audio PCM; `alsamixer -c EVO4` stays
+  empty; tools must target the Mixer card by **id** (not index - probe order
+  varies). Upside: ships today, DKMS-clean, no kernel patching, audio
+  undisturbed across `rmmod`/reload.
+- Real fix to the split = Option A (controls land on card 0).
+
+### HW-sync is the Option-A payoff (key conclusion)
+- The interrupt endpoint (EP 0x83) lives on interface 0, already polled by
+  `snd-usb-audio`. An interrupt-IN endpoint has one logical reader, so Option B
+  cannot own it -> no clean interrupt-URB HW-sync.
+- Option B: build **without** HW-sync. Cache stays correct as long as changes
+  go *through* the driver; only stale case is the physical knob. Don't
+  over-invest in a polling hack.
+- Option A (quirk inside `snd-usb-audio`): already owns EP 0x83's notification
+  path (Scarlett2 pattern) - the natural home for HW-sync.
+
+### Migration sequence
+```
+B: steps 4-6 (gain, volume, monitor, matrix, meters)
+B: step 8 (alsactl persistence; drop evo4-load-config.service)
+   [skip interrupt HW-sync in B - see above]
+-> Python/tests migrate to pyalsa, control by control (ioctl still present)
+-> all green through ALSA   <-- validation gate; this IS the upstream evidence
+-> (optional) retire /dev/evo4
+-> (optional) port proven table into snd-usb-audio quirk for Option A
+```
+- `pyalsa` (`pyalsa.alsahcontrol`, Arch `python-pyalsa`) reads our kcontrols and
+  can subscribe to `snd_ctl_notify` events. This is the Python migration target.
+
+### Option A dev/test workflow
+- **Rebuild the module, not the whole kernel.** Build `snd-usb-audio.ko`
+  against source matching `uname -r` with the live `.config`
+  (`zcat /proc/config.gz > .config; make olddefconfig; make modules_prepare;
+  make M=sound/usb modules`), then `rmmod snd_usb_audio; insmod ...`. Vermagic
+  must match or `insmod` rejects it. Requires nothing streaming the EVO.
+- Files: new `sound/usb/mixer_evo.c` (port of the B control table, `.get/.put`
+  call `snd_usb_ctl_msg()` instead of `evo_ctrl()`), hook in `mixer_quirks.c`
+  `snd_usb_mixer_apply_create_quirk()` by VID/PID, add to `sound/usb/Makefile`.
+- Full custom-kernel build only for a final clean-boot sanity check / upstream.
+
+### Decoding interrupt notifications (for Option A step 7)
+- Use **usbmon / Wireshark** on bus 3 (`usbmon3`, filter
+  `usb.endpoint_address == 0x83`). usbmon sees the traffic even though
+  `snd-usb-audio` owns the endpoint.
+- Turn each physical control (smart knob, monitor encoder, front-panel) one at
+  a time; map action -> notification bytes.
+- Expect either the UAC2 6-byte status message (`bInfo, bAttribute, wValue,
+  wIndex` -> then `GET_CUR` for the value) **or** a vendor bitmap (Scarlett2
+  does this). Capture decides. Cross-check with Windows app if ambiguous.
 
 ---
 
